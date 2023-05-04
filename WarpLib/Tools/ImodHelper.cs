@@ -152,6 +152,7 @@ namespace Warp.Tools
         public Image Micrograph;
         public float2 Shift;
         public float MaxTranslation;
+        public float PriorRecordDose;
     }
 
     public class ParsedEntry : WarpBase

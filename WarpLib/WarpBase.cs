@@ -60,7 +60,7 @@ namespace Warp
                 else if (property.PropertyType.IsEnum)
                     XMLHelper.WriteParamNode(writer, property.Name, ((int)property.GetValue(this)).ToString());
                 else
-                    throw new Exception("Value type not supported.");
+                    throw new Exception($"Value type not supported.");
             }
         }
 

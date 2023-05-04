@@ -1,0 +1,79 @@
+﻿<UserControl x:Class="Warp.Controls.UserClassificationSettings"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:m="clr-namespace:MahApps.Metro.Controls;assembly=MahApps.Metro"
+             xmlns:s="clr-namespace:Sparta;assembly=WarpControls"
+             xmlns:local="clr-namespace:Warp.Controls"
+             mc:Ignorable="d" 
+             d:DesignHeight="450" d:DesignWidth="800">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <local:TextToDecimalConverter x:Key="textToDecimalConverter" />
+        </ResourceDictionary>
+    </UserControl.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="28" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="48" />
+        </Grid.RowDefinitions>
+        <StackPanel Name="GridOptionsClassificationRow0" Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center">
+            <RadioButton Name="Class2DRadioButton" GroupName="ClassificationType" VerticalAlignment="Center" Margin="0,3,0,0" Content="2D " IsChecked="{Binding Path=class2D}" FontSize="13" />
+            <RadioButton Name="Class3DRadioButton" GroupName="ClassificationType" VerticalAlignment="Center" Margin="0,3,0,0" Content="3D " IsChecked="{Binding Path=class3D}" FontSize="13" />
+            <s:ValueSlider Value="{Binding NClasses, Mode=TwoWay}" UpdateTrigger="PropertyChanged" TextFormat="{} {0} classes after " MinValue="2" MaxValue="100" StepSize="1" VerticalAlignment="Center" />
+            <s:ValueSlider Value="{Binding NParticles, Mode=TwoWay}" UpdateTrigger="PropertyChanged" TextFormat="{} {0} particles" MinValue="1000" MaxValue="100000" StepSize="100" VerticalAlignment="Center" />
+        </StackPanel>
+        
+        <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <RadioButton Name="ClassificationHoursRadioButton" GroupName="ClassificationWhen" IsChecked="{Binding DoEveryHours, Mode=TwoWay}" Content="Do every " FontSize="13" VerticalAlignment="Center" />
+            <s:ValueSlider Value="{Binding EveryHours, Mode=TwoWay, Converter={StaticResource textToDecimalConverter}}" UpdateTrigger="PropertyChanged" TextFormat=" {0} minutes  |  " MinValue="10" MaxValue="360" StepSize="10" />
+            <RadioButton Name="ClassificationParticlesRadioButton"  GroupName="ClassificationWhen" IsChecked="{Binding DoEveryNParticles, Mode=TwoWay}" Content=" Do every " FontSize="13" VerticalAlignment="Center" />
+            <s:ValueSlider Value="{Binding EveryNParticles, Mode=TwoWay, Converter={StaticResource textToDecimalConverter}}" UpdateTrigger="PropertyChanged" TextFormat=" {0} particles  |  " MinValue="1000" MaxValue="1000000" StepSize="1000" />
+            <RadioButton Name="ClassificationManualRadioButton"  GroupName="ClassificationWhen" IsChecked="{Binding DoManualClassification, Mode=TwoWay}" Content="Manually  |  " FontSize="13" VerticalAlignment="Center" />
+            <RadioButton Name="ClassificationImmediateRadioButton"  GroupName="ClassificationWhen" IsChecked="{Binding DoImmediateClassification, Mode=TwoWay}" Content="As fast as possible" FontSize="13" VerticalAlignment="Center" />
+        </StackPanel>
+        
+        <StackPanel Grid.Row="3" Orientation="Horizontal" VerticalAlignment="Center">
+            <Label Content="{Binding Server}" HorizontalAlignment="Right"/>
+            <Label Content="with username" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+            <TextBox Text="{Binding UserName, Mode=TwoWay}" MinWidth="100" MaxWidth="100" MaxHeight="25"/>
+            <Label Content="and key"/>
+            <Button Name="ButtonClassificationSshKey" Style="{StaticResource HyperlinkLikeButton}" Click="ButtonClassificationSshKey_OnClick" VerticalAlignment="Center">
+                <TextBlock Name="ButtonClassificationSshKeyText" HorizontalAlignment="Right" TextAlignment="Right" MaxWidth="250">Select Ssh key...</TextBlock>
+            </Button>
+        </StackPanel>
+        <StackPanel Grid.Row="4" Orientation="Horizontal" VerticalAlignment="Center">
+            <Label Content="Import folder:"/>
+            <TextBox Text="{Binding ClassificationMountPoint, Mode=TwoWay}" MinWidth="200"/>
+            <Button Name="ButtonMountPoint" Style="{StaticResource HyperlinkLikeButton}" Click="ButtonMountPoint_OnClick" Margin="6,0,0,0" VerticalAlignment="Center">
+                <TextBlock Name="ButtonMountPointText" HorizontalAlignment="Right" TextAlignment="Right" MaxWidth="400">Browse</TextBlock>
+            </Button>
+        </StackPanel>
+        <StackPanel Grid.Row="5" Orientation="Horizontal" VerticalAlignment="Center">
+            <Button Name="ButtonCryosparcProject" Style="{StaticResource HyperlinkLikeButton}" Click="ButtonCryosparcProject_OnClick" Margin="6,0,0,0" VerticalAlignment="Center">
+                <TextBlock Name="ButtonCryosparcProjectText" HorizontalAlignment="Left" TextAlignment="Left">Project</TextBlock>
+            </Button>
+            <Label Content="{Binding CryosparcProject}" Margin="6,0,0,0"/>
+            <Label Content="{Binding CryosparcProjectName}" Margin="6,0,0,0"/>
+        </StackPanel>
+        <StackPanel Grid.Row="7" Orientation="Horizontal" VerticalAlignment="Center">
+            <Label Content="Email" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding CryosparcUserEmail, Mode=TwoWay}" MinWidth="100" MaxWidth="200" MaxHeight="25"/>
+            <Label Content="    |    Lane" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding CryosparcLane, Mode=TwoWay}" MinWidth="100" MaxWidth="400" MaxHeight="25"/>
+        </StackPanel>
+        <StackPanel Grid.Row="9" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <Button Name="ButtonClose" Content="Close" FontSize="20" FontWeight="Medium" Foreground="CornflowerBlue" Margin="0,0,0,0" VerticalAlignment="Bottom" Style="{StaticResource ChromelessButtonStyle}" Click="ButtonClose_OnClick"/>
+        </StackPanel>
+    </Grid>
+</UserControl>
