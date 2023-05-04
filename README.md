@@ -1,3 +1,10 @@
+# Repo description
+This repo is a fork of WARP with some extra utilities.
+See the manual here: 
+[DOCX](https://github.com/genisvalentin/warp-KI/blob/abf1aefc530769fdb0d178b130a72ebc4c36f0e5/KI-WARP-manual.docx)
+[PDF](https://github.com/genisvalentin/warp-KI/blob/abf1aefc530769fdb0d178b130a72ebc4c36f0e5/KI-WARP-manual.pdf)
+
+
 # Using Warp
 
 If you just want to use Warp, all tutorials and binaries can be found at http://www.warpem.com. Continue reading this README only if you're interested in compiling Warp from source.
