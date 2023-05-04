@@ -1,0 +1,9 @@
+System.IO.IOException: Pipe is broken.
+   at System.IO.Pipes.PipeStream.WinIOError(Int32 errorCode)
+   at System.IO.Pipes.PipeStream.WriteCore(Byte[] buffer, Int32 offset, Int32 count)
+   at System.Runtime.Serialization.Formatters.Binary.SerializationHeaderRecord.Write(__BinaryWriter sout)
+   at System.Runtime.Serialization.Formatters.Binary.ObjectWriter.WriteSerializedStreamHeader(Int64 topId, Int64 headerId)
+   at System.Runtime.Serialization.Formatters.Binary.ObjectWriter.Serialize(Object graph, Header[] inHeaders, __BinaryWriter serWriter, Boolean fCheck)
+   at System.Runtime.Serialization.Formatters.Binary.BinaryFormatter.Serialize(Stream serializationStream, Object graph, Header[] headers, Boolean fCheck)
+   at WarpWorker.Program.SendSuccessStatus(Boolean status) in C:\git\warp\WarpWorker\Program.cs:line 352
+   at WarpWorker.Program.Main(String[] args) in C:\git\warp\WarpWorker\Program.cs:line 330

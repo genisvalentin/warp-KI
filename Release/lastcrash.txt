@@ -1,0 +1,13 @@
+4/27/2023 8:01:05 PM:
+System.ObjectDisposedException: The CancellationTokenSource has been disposed.
+   at System.Threading.CancellationTokenSource.ThrowObjectDisposedException()
+   at Warp.MainWindow.<.ctor>b__20_4(Object a, EventArgs b) in C:\git\warp\Warp\MainWindow.xaml.cs:line 177
+   at System.Windows.Threading.DispatcherTimer.FireTick(Object unused)
+   at System.Windows.Threading.ExceptionWrapper.InternalRealCall(Delegate callback, Object args, Int32 numArgs)
+   at System.Windows.Threading.ExceptionWrapper.TryCatchWhen(Object source, Delegate callback, Object args, Int32 numArgs, Delegate catchHandler)
+   at System.Threading.CancellationTokenSource.ThrowObjectDisposedException()
+   at Warp.MainWindow.<.ctor>b__20_4(Object a, EventArgs b) in C:\git\warp\Warp\MainWindow.xaml.cs:line 177
+   at System.Windows.Threading.DispatcherTimer.FireTick(Object unused)
+   at System.Windows.Threading.ExceptionWrapper.InternalRealCall(Delegate callback, Object args, Int32 numArgs)
+   at System.Windows.Threading.ExceptionWrapper.TryCatchWhen(Object source, Delegate callback, Object args, Int32 numArgs, Delegate catchHandler)
+
