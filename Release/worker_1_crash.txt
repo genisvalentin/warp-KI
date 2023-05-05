@@ -1,9 +1,20 @@
-System.IO.IOException: Pipe is broken.
-   at System.IO.Pipes.PipeStream.WinIOError(Int32 errorCode)
-   at System.IO.Pipes.PipeStream.WriteCore(Byte[] buffer, Int32 offset, Int32 count)
-   at System.Runtime.Serialization.Formatters.Binary.SerializationHeaderRecord.Write(__BinaryWriter sout)
-   at System.Runtime.Serialization.Formatters.Binary.ObjectWriter.WriteSerializedStreamHeader(Int64 topId, Int64 headerId)
-   at System.Runtime.Serialization.Formatters.Binary.ObjectWriter.Serialize(Object graph, Header[] inHeaders, __BinaryWriter serWriter, Boolean fCheck)
-   at System.Runtime.Serialization.Formatters.Binary.BinaryFormatter.Serialize(Stream serializationStream, Object graph, Header[] headers, Boolean fCheck)
-   at WarpWorker.Program.SendSuccessStatus(Boolean status) in C:\git\warp\WarpWorker\Program.cs:line 352
-   at WarpWorker.Program.Main(String[] args) in C:\git\warp\WarpWorker\Program.cs:line 330
+System.AggregateException: One or more errors occurred. ---> System.IO.IOException: There is not enough space on the disk.
+
+   at System.IO.__Error.WinIOError(Int32 errorCode, String maybeFullPath)
+   at System.IO.FileStream.WriteCore(Byte[] buffer, Int32 offset, Int32 count)
+   at Warp.Tools.IOHelper.WriteMapFloat(String path, MapHeader header, Single[][] data) in C:\git\warp\WarpLib\Tools\IOHelper.cs:line 347
+   at Warp.Image.WriteMRC(String path, Single pixelSize, Boolean doStatistics, HeaderMRC header) in C:\git\warp\WarpLib\Image.cs:line 587
+   at Warp.Movie.<>c__DisplayClass298_4.<ExportMovie>b__9() in C:\git\warp\WarpLib\Movie.cs:line 3273
+   at System.Threading.Tasks.Task.Execute()
+   --- End of inner exception stack trace ---
+   at System.Threading.Tasks.Task.ThrowIfExceptional(Boolean includeTaskCanceledExceptions)
+   at System.Threading.Tasks.Task.Wait(Int32 millisecondsTimeout, CancellationToken cancellationToken)
+   at WarpWorker.Program.Main(String[] args) in C:\git\warp\WarpWorker\Program.cs:line 107
+---> (Inner Exception #0) System.IO.IOException: There is not enough space on the disk.
+
+   at System.IO.__Error.WinIOError(Int32 errorCode, String maybeFullPath)
+   at System.IO.FileStream.WriteCore(Byte[] buffer, Int32 offset, Int32 count)
+   at Warp.Tools.IOHelper.WriteMapFloat(String path, MapHeader header, Single[][] data) in C:\git\warp\WarpLib\Tools\IOHelper.cs:line 347
+   at Warp.Image.WriteMRC(String path, Single pixelSize, Boolean doStatistics, HeaderMRC header) in C:\git\warp\WarpLib\Image.cs:line 587
+   at Warp.Movie.<>c__DisplayClass298_4.<ExportMovie>b__9() in C:\git\warp\WarpLib\Movie.cs:line 3273
+   at System.Threading.Tasks.Task.Execute()<---

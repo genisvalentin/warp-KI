@@ -707,7 +707,7 @@ namespace Warp
         public bool active = false;
         private Task[] TaskArray = new Task[5];
         private EPUSession session;
-        private FileSystemWatcher FileWatcher;
+        public FileSystemWatcher FileWatcher;
         private bool NeedsRelaunchClass = false;
         private Dictionary<string, int[]> directoryIsActiveDict = new Dictionary<string, int[]>();
 
@@ -776,7 +776,7 @@ namespace Warp
         public string PathBoxNetFiltered = "";
         private DateTime latestClassLaunchTime;
 
-        public CancellationTokenSource tokenSource = new CancellationTokenSource();
+        //public CancellationTokenSource tokenSource = new CancellationTokenSource();
         Task ClassificationTask;
 
         private int LastNGoodParticles = 0;
@@ -1090,7 +1090,6 @@ namespace Warp
         {
             LogToFile("Switch session");
             LogToFile($"Active {active}");
-            CurrentStackerFolder = folder;
             if (!active) return;
 
             LogToFile($"Watching {folder}");
@@ -1102,11 +1101,12 @@ namespace Warp
             if (Options.Stacker.GridScreening && !directoryIsActiveDict.ContainsKey(folder)) return;
             if (directoryIsActiveDict[folder][1] == 0) return;
 
-            tokenSource.Cancel();
-            tokenSource.Dispose();
+            //tokenSource.Cancel();
+            //tokenSource.Dispose();
 
             if (active && !Waiting) { Hibernate(); }
 
+            CurrentStackerFolder = folder;
             Application.Current.Dispatcher.Invoke(SetPaths);
             session = new EPUSession(Options);
             LastNGoodParticles = 0;
@@ -1122,7 +1122,7 @@ namespace Warp
 
         public async void Activate()
         {
-            tokenSource = new CancellationTokenSource();
+            //tokenSource = new CancellationTokenSource();
             session = new EPUSession(Options);
             active = true;
             LogToFile("Start processing");
@@ -1188,13 +1188,13 @@ namespace Warp
 
         public async void Hibernate()
         {
-            if (FileWatcher != null) FileWatcher.Dispose();
+            /*
             try
             {
                 tokenSource.Cancel();
                 tokenSource.Dispose();
             }
-            catch { }
+            catch { }*/
             try
             {
                 SwitchSessionCancellationTokenSource.Cancel();
@@ -1226,9 +1226,12 @@ namespace Warp
             LogToFile($"Created {e.FullPath}");
             if (!Directory.Exists(e.FullPath)) return;
 
-            SwitchSessionCancellationTokenSource.Cancel();
-            SwitchSessionCancellationTokenSource.Dispose();
-
+            try
+            {
+                SwitchSessionCancellationTokenSource.Cancel();
+                SwitchSessionCancellationTokenSource.Dispose();
+            }
+            catch { };
             SwitchSessionCancellationTokenSource = new CancellationTokenSource();
             await SwitchSession(e.FullPath);
         }

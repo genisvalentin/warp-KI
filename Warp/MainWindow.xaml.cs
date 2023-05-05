@@ -443,8 +443,8 @@ namespace Warp
             {
                 EPUSessionCancellationToken.Cancel();
                 EPUSessionCancellationToken.Dispose();
-                sessionManager.tokenSource.Cancel();
-                sessionManager.tokenSource.Dispose();
+                //sessionManager.tokenSource.Cancel();
+                //sessionManager.tokenSource.Dispose();
                 sessionManager.SwitchSessionCancellationTokenSource.Cancel();
                 sessionManager.SwitchSessionCancellationTokenSource.Dispose();
                 SaveDefaultSettings();
@@ -1369,6 +1369,7 @@ namespace Warp
             } else
             {
                 sessionManager.Hibernate();
+                if (sessionManager.FileWatcher != null) sessionManager.FileWatcher.Dispose();
                 if (sessionManager.Waiting)
                 {
                     ButtonStartProcessing.IsEnabled = true;
