@@ -79,20 +79,20 @@ namespace Warp
                             if (DeleteWhenDone)
                             {
                                 File.Delete(filename);
-                                LogToFile("Removing file " + filename);
+                                //LogToFile("Removing file " + filename);
                             }
                             else
                             {
                                 File.Move(filename, FolderPath + "original/" + Helper.PathToNameWithExtension(filename));
-                                LogToFile("Archiving file " + filename);
+                                //LogToFile("Archiving file " + filename);
                             }
                         }
                     }
-                    LogToFile("Done moving: " + Helper.PathToNameWithExtension(filename));
+                    //LogToFile("Done moving: " + Helper.PathToNameWithExtension(filename));
                 }
                 catch (Exception exc)
                 {
-                    LogToFile("Something went wrong moving mdoc file" + Helper.PathToNameWithExtension(filename) + ":\n" + exc.ToString());
+                    //LogToFile("Something went wrong moving mdoc file" + Helper.PathToNameWithExtension(filename) + ":\n" + exc.ToString());
                 }
             }
 
@@ -109,7 +109,7 @@ namespace Warp
                 f => !f.Contains(ignore)
                 ))
             {
-                LogToFile($"File {filename} does not contain {ignore}");
+                //LogToFile($"File {filename} does not contain {ignore}");
                 try
                 {
                     MapHeader Header = MapHeader.ReadFromFile(filename);
@@ -135,7 +135,7 @@ namespace Warp
             }
 
             int NFiles = FrameNames.Count;
-            LogToFile("Stacker found " + NFiles.ToString() + " in directory " + FolderPath);
+            //LogToFile("Stacker found " + NFiles.ToString() + " in directory " + FolderPath);
 
             if (NFiles == 0)
             {
@@ -155,7 +155,7 @@ namespace Warp
 
                 while (!Success)
                 {
-                    LogToFile(Options.Import.Folder + " and " + Helper.PathToNameWithExtension(FrameName));
+                    //LogToFile(Options.Import.Folder + " and " + Helper.PathToNameWithExtension(FrameName));
                     string NameOut = Options.Import.Folder + "\\" + Helper.PathToNameWithExtension(FrameName);
                     try
                     {
@@ -174,25 +174,25 @@ namespace Warp
                             {
                                 if (DeleteWhenDone) { 
                                     File.Delete(FrameName);
-                                    LogToFile("Removing file " + FrameName);
+                                    //LogToFile("Removing file " + FrameName);
                                 }
                                 else
                                 {
                                     File.Move(FrameName, FolderPath + "original/" + Helper.PathToNameWithExtension(FrameName));
-                                    LogToFile("Archiving file " + FrameName);
+                                    //LogToFile("Archiving file " + FrameName);
                                 }
                             }
                         }
                         HaveBeenProcessed.Add(FrameName);
                         Success = true;
 
-                        LogToFile("Done moving: " + Helper.PathToNameWithExtension(FrameName));
+                        //LogToFile("Done moving: " + Helper.PathToNameWithExtension(FrameName));
                     }
                     catch (Exception exc)
                     {
-                        LogToFile("Something went wrong moving " + Helper.PathToNameWithExtension(FrameName) + ":\n" + exc.ToString());
-                        LogToFile($"Source: {FrameName}\nDest:{NameOut}");
-                        LogToFile($"Current session folder: {Options.Import.Folder}");
+                        //LogToFile("Something went wrong moving " + Helper.PathToNameWithExtension(FrameName) + ":\n" + exc.ToString());
+                        //LogToFile($"Source: {FrameName}\nDest:{NameOut}");
+                        //LogToFile($"Current session folder: {Options.Import.Folder}");
                     }
                     
                 }
@@ -210,11 +210,11 @@ namespace Warp
 
         private int GuessNFrames(string EPUdir, string Extension, string Ignore)
         {
-            LogToFile("Enumerating all files...");
+            //LogToFile("Enumerating all files...");
             IEnumerable<string> fileList = Directory.EnumerateFiles(EPUdir, "*"+Extension, SearchOption.AllDirectories).Where(f => !f.Contains($"/{Ignore}/"));
 
             int nFiles = fileList.Count();
-            LogToFile("Guess Nframes counted " + nFiles.ToString());
+            //LogToFile("Guess Nframes counted " + nFiles.ToString());
             if (nFiles < 4) return(0);
             List<int> nFrames = new List<int>();
             int i = 0;
@@ -226,17 +226,17 @@ namespace Warp
                     nFrames.Add(Header.Dimensions.Z);
                 } catch (System.IO.IOException e)
                 {
-                    LogToFile(
+                    /*LogToFile(
                     $"{e.GetType().Name}: The write operation could not " +
                     "be performed because the specified " +
-                    "part of the file is locked.");
+                    "part of the file is locked.");*/
                     return (0);
                 }
                 i++;
                 if (i == 3) { break; }
             }
             int maxNFrames = nFrames.Max();
-            LogToFile($"NFrames: {maxNFrames}");
+            //LogToFile($"NFrames: {maxNFrames}");
             return (maxNFrames);
         }
 
@@ -245,10 +245,10 @@ namespace Warp
 
         public void EstimateNOpticGroups()
         {
-            LogToFile("Estimating N Optic groups");
+            //LogToFile("Estimating N Optic groups");
             if (OpticsGroupDict.Count() < (Options.Picking.WriteOpticGroupsN + 1))
             {
-                LogToFile("Not enough micrographs to estimate N optics groups. " + OpticsGroupDict.Count().ToString() + "/" + Options.Picking.WriteOpticGroupsN.ToString());
+                //LogToFile("Not enough micrographs to estimate N optics groups. " + OpticsGroupDict.Count().ToString() + "/" + Options.Picking.WriteOpticGroupsN.ToString());
                 return;
             }
 
@@ -273,32 +273,46 @@ namespace Warp
             System.Numerics.Vector2 vector1 = new System.Numerics.Vector2(0, 0);
             System.Numerics.Vector2 vector2 = new System.Numerics.Vector2(0, 0);
             System.Numerics.Vector2[] a = new System.Numerics.Vector2[] { new System.Numerics.Vector2(0, 0), new System.Numerics.Vector2(0, 0) };
-            //The bin factor is important to find the foil hole pattern. We try from bin=25 to bin=50 to find the right bin factor.
+            //The bin factor is important to find the foil hole pattern. We try from bin=20 to bin=50 to find the right bin factor.
             int q = 0;
-            do {
+            while (bin < 55) {
+
                 if (a[0].X == 0 && a[0].Y == 0)
                 {
                     vector1 = OpticGroups.GetVectors(coords.ToArray(), 90, 0, bin: bin);
+                    // Quantifoil grids have an almost square pattern. Therefore, the
+                    // second vector will be at 90 +- 10 degrees from the first. That's why I substract 10 to the atan
                     var atan = -Math.Atan2(vector1.Y, vector1.X) * 180 / Math.PI - 10;
                     q = (int)atan;
-                    LogToFile($"Start search angle: {q}");
+                    //LogToFile($"Start search angle: {q}");
                 }
-                // Quantifoil grids have an almost square pattern. Therefore, the
-                // second vector will be at 90 +- 10 degrees from the first
-                if ((a[0].X + a[0].Y) * (a[1].X + a[1].Y) == 0) vector2 = OpticGroups.GetVectors(coords.ToArray(), 20, 1, bin: bin, start_angle: q); 
 
-                LogToFile($"Bin: {bin}");
-                LogToFile($"Vectors {vector1.X},{vector1.Y}; {vector2.X},{vector2.Y}");
+                if ((a[0].X + a[0].Y) * (a[1].X + a[1].Y) == 0) vector2 = OpticGroups.GetVectors(coords.ToArray(), 20, 1, bin: bin, start_angle: q);
+
+                //LogToFile($"Bin: {bin}");
+                //LogToFile($"Vectors {vector1.X},{vector1.Y}; {vector2.X},{vector2.Y}");
+
+                //We don't accept stolutions were vectors are very different in length.
+                //Assuming a max theoretical tilt of 45 degress, cos(45 degrees) = 0.7 approx
+                //The vectors should be max 0.7 times smaller or 1.43 times bigger than the other.
+                //Just to be safe, I used cos(50 degrees), i.e. 0.64 and 1.55
+                var ratio = vector1.Length() / vector2.Length();
+                if (ratio > 1.55 || ratio < 0.64) {
+                    bin += 5;
+                    continue;
+                }
+
                 a = OpticGroups.RefineVectors(coords.ToArray(), vector1, vector2);
-                LogToFile($"Refined vectors {a[0].X},{a[0].Y}; {a[1].X},{a[1].Y}");
-                if (bin > 50) break;
+                //LogToFile($"Refined vectors {a[0].X},{a[0].Y}; {a[1].X},{a[1].Y}");
+
                 if ( (a[0].X + a[0].Y) * (a[1].X + a[1].Y) == 0) //if any of the two vectors is (0,0), we try again with a higher bin.
                 {
                     bin += 5;
                     continue;
                 }
+
                 break;
-            } while (true);
+            }
 
             //Plot Optic Groups        
             var plt = new ScottPlot.Plot(400, 300);
@@ -567,13 +581,13 @@ namespace Warp
                 XMLfiles = Directory.GetFiles(CurrentXMLFolder, "*.xml", SearchOption.AllDirectories);
             } catch (UnauthorizedAccessException ex)
             {
-                LogToFile("UpdateXmlFileList UnauthorizedAccessException" + ex.Message);
+                //LogToFile("UpdateXmlFileList UnauthorizedAccessException" + ex.Message);
             } catch (DirectoryNotFoundException ex)
             {
-                LogToFile("UpdateXmlFileList DirectoryNotFoundException. " + ex.Message);
+                //LogToFile("UpdateXmlFileList DirectoryNotFoundException. " + ex.Message);
             } finally
             {
-                LogToFile("Listed " + XMLfiles.Count() + " XML files.");
+                //LogToFile("Listed " + XMLfiles.Count() + " XML files.");
             }
         }
 
@@ -581,7 +595,7 @@ namespace Warp
             string XMLfile = default;
             int index = Helper.PathToName(FrameName).IndexOf("_fractions");
             if (index < 0) {
-                LogToFile(FrameName + "does not contain the _fractions substring. Cannot look for XML file.");
+                //LogToFile(FrameName + "does not contain the _fractions substring. Cannot look for XML file.");
                 return;
             }
             string searchFile = Options.Import.Folder + @"\" + "microscopeXMLfiles" + @"\" + Helper.PathToName(FrameName).Substring(0, index) + ".xml";
@@ -629,7 +643,7 @@ namespace Warp
             }
             else
             {
-                LogToFile(XMLfile + ".xml was not found.");
+                //LogToFile(XMLfile + ".xml was not found.");
             }
         }
 
@@ -696,7 +710,9 @@ namespace Warp
                         await outputFile.WriteLineAsync(s);
                     }
                 }
-                catch { LogToFile(s); };
+                catch { 
+                    //LogToFile(s);
+                };
             });
         }
     }
@@ -776,7 +792,6 @@ namespace Warp
         public string PathBoxNetFiltered = "";
         private DateTime latestClassLaunchTime;
 
-        //public CancellationTokenSource tokenSource = new CancellationTokenSource();
         Task ClassificationTask;
 
         private int LastNGoodParticles = 0;
@@ -825,7 +840,7 @@ namespace Warp
 
         public void SessionLoop(CancellationToken cancellationToken)
         {
-            LogToFile("EPU session manager loop");
+            //LogToFile("EPU session manager loop");
 
             Dictionary<string, string> classificationStatus = new Dictionary<string, string> { { "status", ""} };
             Dictionary<string, string> launchClassificationStatus = new Dictionary<string, string>();
@@ -852,7 +867,7 @@ namespace Warp
                         TaskArray[i] = Task.Run(() => session.UpdateXmlFileList(CurrentXMLFolder)).ContinueWith(_ =>
                         {
                             AggregateException ex = _.Exception;
-                                LogToFile($"UpdateXmlFileList task exception {ex.GetType().Name}: {ex.Message}");
+                                //LogToFile($"UpdateXmlFileList task exception {ex.GetType().Name}: {ex.Message}");
                         }, TaskContinuationOptions.OnlyOnFaulted);
                     }
                     continue;
@@ -867,7 +882,7 @@ namespace Warp
                         TaskArray[i] = Task.Run(() => session.Stacker(CurrentStackerFolder, ext, StackerIgnore)).ContinueWith(_ =>
                         {
                             AggregateException ex = _.Exception;
-                            LogToFile($"Stacker task exception {ex.GetType().Name}: {ex.Message}");
+                            //LogToFile($"Stacker task exception {ex.GetType().Name}: {ex.Message}");
                         }, TaskContinuationOptions.OnlyOnFaulted);
                     }
                     continue;
@@ -890,7 +905,7 @@ namespace Warp
                         TaskArray[i] = Task.Run(session.EstimateNOpticGroups).ContinueWith(_ =>
                         {
                             AggregateException ex = _.Exception;
-                            LogToFile($"EstimateNOpticGroups task exception {ex.GetType().Name}: {ex.Message}");
+                            //LogToFile($"EstimateNOpticGroups task exception {ex.GetType().Name}: {ex.Message}");
                         }, TaskContinuationOptions.OnlyOnFaulted);
                         continue;
                     }
@@ -906,7 +921,7 @@ namespace Warp
                         }).ContinueWith(_ =>
                         {
                             AggregateException ex = _.Exception;
-                            LogToFile($"UpdateOpticsGroup task exception {ex.GetType().Name}: {ex.Message}");
+                            //LogToFile($"UpdateOpticsGroup task exception {ex.GetType().Name}: {ex.Message}");
                         }, TaskContinuationOptions.OnlyOnFaulted);
                     }
                     continue;
@@ -918,7 +933,7 @@ namespace Warp
                     {
 
                         classificationStatus = cryosparcclient.getClassificationResults(CurrentSessionName);
-                        LogToFile($"Classification status {classificationStatus["success"]}, {classificationStatus["status"]} ");
+                        //LogToFile($"Classification status {classificationStatus["success"]}, {classificationStatus["status"]} ");
                         if (Options.Classification.NParticles < NGoodParticles)
                         {
                             CurrentClassificationStatus = classificationStatus["status"];
@@ -985,7 +1000,7 @@ namespace Warp
                         if (NeedsRelaunchClass)
                         {
                             LastNGoodParticles = NGoodParticles;
-                            LogToFile("Launch classification");
+                            //LogToFile("Launch classification");
                             latestClassLaunchTime = DateTime.Now;
                             cryosparcClient.SessionInfo sessionInfo = OptionsToSessionInfo();
                             string BoxNetSuffix = Helper.PathToNameWithExtension(Options.Picking.ModelPath);
@@ -994,10 +1009,10 @@ namespace Warp
                             if (File.Exists(Path.Combine(Options.Import.Folder, $"goodparticles_{BoxNetSuffix}.star")))
                             {
                                 File.Copy(Path.Combine(Options.Import.Folder, $"goodparticles_{BoxNetSuffix}.star"), particle_meta_path);
-                                ClassificationTask = Task.Run(() => cryosparcclient.Run(sessionInfo, cancellationToken)).ContinueWith(_ =>
+                                TaskArray[i] = Task.Run(() => cryosparcclient.Run(sessionInfo, cancellationToken)).ContinueWith(_ =>
                                 {
                                     AggregateException ex = _.Exception;
-                                    LogToFile($"UpdateOpticsGroup task exception {ex.GetType().Name}: {ex.Message}");
+                                    //LogToFile($"ClassificationTask task exception {ex.GetType().Name}: {ex.Message}");
                                 }, TaskContinuationOptions.OnlyOnFaulted);
                                 NeedsRelaunchClass = false;
                             }
@@ -1088,13 +1103,13 @@ namespace Warp
 
         public async Task SwitchSession(string folder)
         {
-            LogToFile("Switch session");
-            LogToFile($"Active {active}");
+            //LogToFile("Switch session");
+            //LogToFile($"Active {active}");
             if (!active) return;
 
-            LogToFile($"Watching {folder}");
+            //LogToFile($"Watching {folder}");
             var directoryIsActive = await WaitForActiveFolder(SwitchSessionCancellationTokenSource.Token, folder);
-            LogToFile($"Directory is {directoryIsActive}");
+            //LogToFile($"Directory is {directoryIsActive}");
             if (!directoryIsActive) return;
             if (SwitchSessionCancellationTokenSource.IsCancellationRequested) return;
             if (Options.Stacker.GridScreening && !Directory.Exists(folder)) return;
@@ -1111,7 +1126,7 @@ namespace Warp
             session = new EPUSession(Options);
             LastNGoodParticles = 0;
             Waiting = false;
-            LogToFile("Start warp processing");
+            //LogToFile("Start warp processing");
 
             Directory.CreateDirectory(Path.GetFullPath(Options.Import.Folder).TrimEnd(Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetFullPath(Options.Import.Folder).TrimEnd(Path.DirectorySeparatorChar) + @"\" + "microscopeXMLfiles");
@@ -1125,7 +1140,7 @@ namespace Warp
             //tokenSource = new CancellationTokenSource();
             session = new EPUSession(Options);
             active = true;
-            LogToFile("Start processing");
+            //LogToFile("Start processing");
             CanLoadDefaultOptions = false;
             
 
@@ -1178,8 +1193,8 @@ namespace Warp
 
             Application.Current.Dispatcher.Invoke(SetPaths);
 
-            LogToFile("Activating!");
-            LogToFile("ImportFolder: " + Options.Import.Folder + ". CurrentStackerFolder = " + CurrentStackerFolder + ". Options.Import.Folder = " + Options.Import.Folder + ". CurrentSessionName =  " + CurrentSessionName + ". CurrentXMLFolder = " + CurrentXMLFolder);
+            //LogToFile("Activating!");
+            //LogToFile("ImportFolder: " + Options.Import.Folder + ". CurrentStackerFolder = " + CurrentStackerFolder + ". Options.Import.Folder = " + Options.Import.Folder + ". CurrentSessionName =  " + CurrentSessionName + ". CurrentXMLFolder = " + CurrentXMLFolder);
             NGoodParticles = 0;
             LastNGoodParticles = 0;
             Waiting = false;
@@ -1188,32 +1203,19 @@ namespace Warp
 
         public async void Hibernate()
         {
-            /*
-            try
-            {
-                tokenSource.Cancel();
-                tokenSource.Dispose();
-            }
-            catch { }*/
             try
             {
                 SwitchSessionCancellationTokenSource.Cancel();
                 SwitchSessionCancellationTokenSource.Dispose();
             } catch { }
-            if (Options.ProcessClassification && ClassificationTask != null) {
-                if (ClassificationTask.Status == TaskStatus.Running)
+            if (Options.ProcessClassification && TaskArray[3] != null) {
+                if (TaskArray[3].Status == TaskStatus.Running)
                 {
                     try
                     {
-                        await ClassificationTask;
+                        await TaskArray[3];
                     }
-                    catch (AggregateException)
-                    {
-                        if (ClassificationTask.Status == TaskStatus.Canceled)
-                        {
-                            LogToFile("Classification task was cancelled");
-                        }
-                    }
+                    catch (AggregateException) { }
                 }
             }
             active = false;
@@ -1223,7 +1225,7 @@ namespace Warp
 
         async void OnCreated(object sender, FileSystemEventArgs e)
         {
-            LogToFile($"Created {e.FullPath}");
+            //LogToFile($"Created {e.FullPath}");
             if (!Directory.Exists(e.FullPath)) return;
 
             try
@@ -1239,13 +1241,13 @@ namespace Warp
         public void OnWatchedFileCreated(object sender, FileSystemEventArgs e)
         {
             var ext = Options.Import.Extension.Substring(Options.Import.Extension.IndexOf('.') + 1);
-            LogToFile($"watched file created: {Path.GetFileName(e.FullPath)}. Starts with FoilHole: {Path.GetFileName(e.FullPath).StartsWith("FoilHole")}. Ends with {ext} is {Path.GetFileName(e.FullPath).EndsWith(ext)}");
+            //LogToFile($"watched file created: {Path.GetFileName(e.FullPath)}. Starts with FoilHole: {Path.GetFileName(e.FullPath).StartsWith("FoilHole")}. Ends with {ext} is {Path.GetFileName(e.FullPath).EndsWith(ext)}");
 
             if (Path.GetFileName(e.FullPath).StartsWith("FoilHole") && Path.GetFileName(e.FullPath).EndsWith(ext)) {
                 int[] vals = { 1, 1 };
                 var watcher = (FileSystemWatcher)sender;
                 directoryIsActiveDict[watcher.Path] = vals;
-                LogToFile($"Adding {watcher.Path} to active dirs");
+                //LogToFile($"Adding {watcher.Path} to active dirs");
                 try
                 {
                     watcher.Created -= OnWatchedFileCreated;
@@ -1295,7 +1297,7 @@ namespace Warp
             {
                 CurrentSessionName = GetSessionName(CurrentStackerFolder);
                 importFolder = Path.Combine(Options.Import.UserFolder, CurrentSessionName);
-                LogToFile($"Setting Options.Import.Folder to {importFolder}");
+                //LogToFile($"Setting Options.Import.Folder to {importFolder}");
                 CurrentXMLFolder = Path.Combine(Options.Picking.MicroscopeXMLPath, CurrentSessionName);
                 if (importFolder.StartsWith(CurrentStackerFolder))
                 {
@@ -1316,7 +1318,7 @@ namespace Warp
             Directory.CreateDirectory(Path.GetFullPath(importFolder).TrimEnd(Path.DirectorySeparatorChar) + @"\" + "microscopeXMLfiles");
 
             Options.Import.Folder = importFolder;
-            LogToFile("ImportFolder: " + Options.Import.Folder + ". CurrentStackerFolder = " + CurrentStackerFolder + ". StackerIgnore = " + StackerIgnore + ". CurrentSessionName =  " + CurrentSessionName + ". CurrentXMLFolder = " + CurrentXMLFolder);
+            //LogToFile("ImportFolder: " + Options.Import.Folder + ". CurrentStackerFolder = " + CurrentStackerFolder + ". StackerIgnore = " + StackerIgnore + ". CurrentSessionName =  " + CurrentSessionName + ". CurrentXMLFolder = " + CurrentXMLFolder);
         }
 
         public void Options_PropertyChanged(object sender, PropertyChangedEventArgs e)
@@ -1377,7 +1379,7 @@ namespace Warp
 
         public async Task<bool> WaitForActiveFolder(CancellationToken cancellationToken, string folder)
         {
-            LogToFile($"Watching directory {folder} to be active.");
+            //LogToFile($"Watching directory {folder} to be active.");
             bool canAccessDir = false;
             if (Directory.Exists(folder))
             {
@@ -1404,7 +1406,7 @@ namespace Warp
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                LogToFile($"Watching directory {folder} to be active.");
+                //LogToFile($"Watching directory {folder} to be active.");
                 if (directoryIsActiveDict.ContainsKey(folder))
                 {
                     if (directoryIsActiveDict[folder][1] == 0)
@@ -1464,15 +1466,17 @@ namespace Warp
         private static void LogToFile(string s)
         {
             string LogFile = Path.Combine(AppContext.BaseDirectory, "log.txt");
-            Application.Current.Dispatcher.InvokeAsync(async () => {
+            Application.Current.Dispatcher.Invoke(() => {
                 try
                 {
                     using (StreamWriter outputFile = new StreamWriter(LogFile, true))
                     {
-                        await outputFile.WriteLineAsync(s);
+                        outputFile.WriteLine(s);
                     }
                 }
-                catch { LogToFile(s); };
+                catch { 
+                    //LogToFile(s);
+                };
             });
         }
     }

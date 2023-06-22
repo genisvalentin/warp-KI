@@ -48,7 +48,7 @@ namespace Warp
             return (result);
         }
 
-        public static double[] FindFrequency(Coord[] coords, int column = 0, bool plot = false, int bin = 25)
+        public static double[] FindFrequency(Coord[] coords, int column = 0, int bin = 25)
         {
             var a = coords.ToList().Select(x => column == 0 ? x.X : x.Y).ToArray();
             var hist = GetHistogram(a);
@@ -66,12 +66,6 @@ namespace Warp
             var idx = transform.IndexOf(transform.Max());
             var frequency = frequencies[idx];
             var amplitude = transform[idx];
-            if (plot)
-            {
-                var plt = new ScottPlot.Plot(600, 400);
-                plt.AddSignal(transform.Select(i => (double)i).ToArray(), samplingFrequency);
-                plt.SaveFig($"C:\\git\\ConsoleApp1\\TestPlots\\{coords[0].X}.png");
-            }
 
             return (new double[] { 1 / frequency * 2, timePeriod, amplitude });
         }
@@ -81,13 +75,14 @@ namespace Warp
         //     Returns the shift, the angle, the frequency, the spacing and the amplitude
         public static Vector2 GetVectors(Coord[] incoords, int search_range, int column = 0, int bin = 25, int start_angle = 0)
         {
+            Console.WriteLine($"GetVectors bin: {bin}");
             double[,] r = new double[search_range, 3]; //angle : freq, sampling, amplitude
             Coord[] transformed_array;
             var coords = RotateArray(incoords, start_angle * Math.PI / 180.0);
             for (var angle = 0; angle < search_range; angle++)
             {
                 transformed_array = RotateArray(coords, angle * Math.PI / 180.0);
-                var findFreq = FindFrequency(transformed_array, column, bin: bin);
+                var findFreq = FindFrequency(transformed_array, column, bin);
                 for (var i = 0; i < 3; i++)
                 {
                     r[angle, i] = findFreq[i];
@@ -118,40 +113,6 @@ namespace Warp
             p = RotatePoint(p, -maxAngle * Math.PI / 180.0);
 
             return (new Vector2((float)p.X, (float)p.Y));
-        }
-
-        public static Vector2 GetShift(Coord[] coords)
-        {
-            var x = coords.ToList().Select(i => i.X).ToArray();
-            var y = coords.ToList().Select(i => i.Y).ToArray();
-            var histx = GetHistogram(x);
-            var histy = GetHistogram(y);
-
-            int shiftindexx = 0;
-            double peakValx = 0;
-            for (int i = 0; i < histx.GetLength(0); i++)
-            {
-                if (histx[i, 1] > peakValx)
-                {
-                    shiftindexx = i;
-                    peakValx = histx[i, 1];
-                }
-            }
-
-            int shiftindexy = 0;
-            double peakValy = 0;
-            for (int i = 0; i < histy.GetLength(0); i++)
-            {
-                if (histy[i, 1] > peakValy)
-                {
-                    shiftindexy = i;
-                    peakValy = histy[i, 1];
-                }
-            }
-
-            double shiftx = histx[shiftindexx, 0];
-            double shifty = histy[shiftindexy, 0];
-            return new Vector2((float)shiftx, (float)shifty);
         }
 
         //Takes a double array with the shift, the angle, the frequency, the spacing and the amplitude after fourier fitting
@@ -188,8 +149,8 @@ namespace Warp
             double[][] providedCentroids = c.Select(x => new double[] { x.X, x.Y }).ToArray();
 
             var kmeans = new KMeans(k: providedCentroids.Length);
-
             kmeans.Centroids = providedCentroids;
+
             var idxs = kmeans.Clusters.Decide(coords.Select(x => new double[] { x.X, x.Y }).ToArray()).Distinct().ToList();
 
             int[][] usedIndexes = new int[idxs.Count][];
@@ -233,11 +194,6 @@ namespace Warp
                 refCentroids.Add(new Coord(cluster[0], cluster[1]));
             }
 
-            //var xindexes = Enumerable.Range(0, indexes.Length).Where(x => indexes[x][0] == 0 && Math.Abs(indexes[x][1]) < 3).ToList();
-            //var yindexes = Enumerable.Range(0, indexes.Length).Where(x => indexes[x][1] == 0 && Math.Abs(indexes[x][0]) < 3).ToList();
-
-            //var xindexes = indexes.Select((v, i) => new { val = v, idx = i }).Where(x => x.val[0] == 0 && Math.Abs(x.val[1]) < 3).Select(x => x.idx).ToList();
-            //var yindexes = indexes.Select((v, i) => new { val = v, idx = i }).Where(x => x.val[1] == 0 && Math.Abs(x.val[0]) < 3).Select(x => x.idx).ToList();
             var unsortedxindexes = indexes.Select((v, i) => new { val = v, idx = i }).Where(x => x.val[0] == 0).ToList();
             unsortedxindexes.Sort((a, b) => Math.Abs(a.val[1]).CompareTo(Math.Abs(b.val[1])));
             var xindexes = unsortedxindexes.Select(x => x.idx).ToList();
@@ -290,7 +246,7 @@ namespace Warp
         {
             double sumx = 0;
             double sumy = 0;
-            coords.ToList().ForEach(x => { sumx += x.X; sumy += x.Y; });
+            coords.ToList().ForEach(c => { sumx += c.X; sumy += c.Y; });
             return new Coord(sumx / coords.Length, sumy / coords.Length);
         }
     }
