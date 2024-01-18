@@ -1,0 +1,73 @@
+﻿<Window x:Class="TiltSeriesViewer.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:TiltSeriesViewer" d:DataContext="{d:DesignInstance Type=local:OptionsTiltSeries}"
+        mc:Ignorable="d"
+        Title="MainWindow" Height="450" Width="800">
+    
+    <Window.Resources>
+        <local:TiltSeriesDataTemplateSelector x:Key="TiltSeriesDataTemplateSelector"/>
+        <DataTemplate x:Key="TiltSeriesDataTemplate1">
+            <StackPanel>
+                <TextBlock Text="Warp: "/>
+                <TextBlock Text="{Binding WarpStatus}" />
+                <TextBlock Text="Newstack: "/>
+                <TextBlock Text="{Binding NewstackStatus}"/>
+                <TextBlock Text="Aretomo: "/>
+                <TextBlock Text="{Binding AretomoStatus}"/>
+                <TextBlock Text="Aretomo2Png: "/>
+                <TextBlock Text="{Binding Aretomo2PngStatus}"/>
+                <TextBlock Text="N images: "/>
+                <TextBlock Text="{Binding TiltImages.Count}" />
+                <Button Content="Copy path" Command="{Binding CopyTomoToClipboardDelegate}" IsEnabled="{Binding IsTomogramAvailable}"/>
+                <Button Content="Process" Command="{Binding ProcessCommand}" IsEnabled="{Binding IsNotProcessing}"/>
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="TiltSeriesDataTemplate2">
+            <StackPanel>
+                <TextBlock Text="Warp 2: "/>
+                <TextBlock Text="{Binding WarpStatus}" />
+                <TextBlock Text="Newstack 2: "/>
+                <TextBlock Text="{Binding NewstackStatus}"/>
+                <TextBlock Text="Aretomo 2: "/>
+                <TextBlock Text="{Binding AretomoStatus}"/>
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="TiltSeriesDataTemplate3">
+            <StackPanel>
+                <TextBlock Text="Warp 3: "/>
+                <TextBlock Text="{Binding WarpStatus}" />
+                <TextBlock Text="Newstack 3: "/>
+                <TextBlock Text="{Binding NewstackStatus}"/>
+                <TextBlock Text="Aretomo 3: "/>
+                <TextBlock Text="{Binding AretomoStatus}"/>
+            </StackPanel>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="50"></RowDefinition>
+            <RowDefinition Height="50"></RowDefinition>
+            <RowDefinition></RowDefinition>
+        </Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Orientation="Horizontal">
+            <Label Content="IP:"/>
+            <TextBox Text="{Binding ConnectionSettings.IP, Mode=OneWayToSource}" MinWidth="100"/>
+            <Label Content="Username:"/>
+            <TextBox Text="{Binding ConnectionSettings.Username, Mode=OneWayToSource}" MinWidth="100"/>
+            <Label Content="Password:"/>
+            <TextBox Text="{Binding ConnectionSettings.Password, Mode=OneWayToSource}" MinWidth="100"/>
+        </StackPanel>
+        <StackPanel Grid.Row="1" Orientation="Horizontal">
+            <Label Content="MdocFilesDirectory:"/>
+            <TextBox Text="{Binding MdocFilesDirectory, Mode=OneWayToSource}" MinWidth="100"/>
+            <Label Content="MdocFilesDirectoryLinux:"/>
+            <TextBox Text="{Binding ConnectionSettings.LinuxPath, Mode=OneWayToSource}" MinWidth="100"/>
+        </StackPanel>
+        <ListView Name="TiltSeriesListView" Grid.Row="2" ItemsSource="{Binding TiltSeriesList}" ItemTemplateSelector="{StaticResource TiltSeriesDataTemplateSelector}">
+                </ListView>
+    </Grid>
+</Window>

@@ -84,7 +84,25 @@ namespace Warp
         public int APIPort
         {
             get { return _APIPort; }
-            set { if (value != _APIPort) { _APIPort = value; OnPropertyChanged(); } }
+            set {
+                if (value != _APIPort) { _APIPort = value; OnPropertyChanged(); } }
+        }
+
+        private string _ClassificationUrl = "";
+        [WarpSerializable]
+        public string ClassificationUrl
+        {
+            get { return _ClassificationUrl; }
+            set {
+                if (value != _ClassificationUrl) { _ClassificationUrl = value; OnPropertyChanged(); } }
+        }
+
+       private string _CryosparcLicense = "";
+        [WarpSerializable]
+        public string CryosparcLicense
+        {
+            get { return _CryosparcLicense; }
+            set { if (value != _CryosparcLicense) { _CryosparcLicense = value; OnPropertyChanged(); } }
         }
 
         public Version GetLatestVersion()

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
@@ -55,9 +56,29 @@ namespace Warp
         private int[] BaselinesGPUStats;
         private DispatcherTimer TimerGPUStats;
         private DispatcherTimer TimerCheckUpdates;
+        private DispatcherTimer TimerProcessTiltSeries;
+        private DispatcherTimer SessionManagerTimer;
 
+        public CancellationTokenSource EPUSessionCancellationToken { get; set; } = new CancellationTokenSource();
+
+        EPUSessionManager sessionManager;
+
+        List<Movie> HasOpticsGroup = new List<Movie>();
+        public bool NeedsRelaunchClass = false;
+
+        public delegate void ProcessingEventHandler(object sender, RoutedEventArgs e);
+        public event ProcessingEventHandler RelaunchClass;
+
+        string LogFile = "";
         public MainWindow()
         {
+            LogFile = Path.Combine(AppContext.BaseDirectory, "log.txt");
+            try { File.Delete(LogFile); } catch { }
+            sessionManager = new EPUSessionManager(Options, EPUSessionCancellationToken.Token);
+            Options.TiltSeries = new OptionsTiltSeries(Options.SshSettings, Options.AretomoSettings);
+            Options.TiltSeries.RuntimePixelSize = Options.Runtime.BinnedPixelSizeMean;
+            Options.TiltSeries.PixelSpacingUnbinned = Options.PixelSizeMean;
+            Options.TiltSeries.TiltSeriesList.CollectionChanged += OnTiltSeriesCollectionChanged;
             #region Make sure everything is OK with GPUs
             try
             {
@@ -88,6 +109,7 @@ namespace Warp
             #region Options events
 
             Options.PropertyChanged += Options_PropertyChanged;
+            Options.PropertyChanged += sessionManager.Options_PropertyChanged;
             Options.Import.PropertyChanged += OptionsImport_PropertyChanged;
             Options.CTF.PropertyChanged += OptionsCTF_PropertyChanged;
             Options.Movement.PropertyChanged += OptionsMovement_PropertyChanged;
@@ -99,6 +121,13 @@ namespace Warp
             Options.Filter.PropertyChanged += OptionsFilter_PropertyChanged;
             Options.Advanced.PropertyChanged += OptionsAdvanced_PropertyChanged;
             Options.Runtime.PropertyChanged += OptionsRuntime_PropertyChanged;
+			Options.Classification.PropertyChanged += OptionsClassification_PropertyChanged;
+            Options.SshSettings.PropertyChanged += OptionsSshSettings_PropertyChanged;
+			Options.Stacker.PropertyChanged += OptionsStacker_PropertyChanged;
+            sessionManager.StartProcessingSignal += StartProcessing;
+            sessionManager.StopProcessingSignal += StopProcessing;
+            RelaunchClass += sessionManager.RelaunchClass;
+            sessionManager.PropertyChanged += SessionManager_PropertyChanged;
 
             #endregion
 
@@ -106,13 +135,15 @@ namespace Warp
 
             #region GPU statistics
 
+            BaselinesGPUStats = Helper.ArrayOfFunction(i => (int)GPU.GetFreeMemory(i), GPU.GetDeviceCount());
+
             CheckboxesGPUStats = Helper.ArrayOfFunction(i =>
                                                         {
                                                             CheckBox NewCheckBox = new CheckBox
                                                             {
                                                                 Foreground = Brushes.White,
                                                                 Margin = new Thickness(10, 0, 10, 0),
-                                                                IsChecked = true,
+                                                                IsChecked = BaselinesGPUStats[i] > 4000 ? true : false, //GPUS with less than 4Gb of memory are disabled by default
                                                                 Opacity = 0.5,
                                                                 Focusable = false
                                                             };
@@ -124,22 +155,29 @@ namespace Warp
                                                         GPU.GetDeviceCount());
             foreach (var checkBox in CheckboxesGPUStats)
                 PanelGPUStats.Children.Add(checkBox);
-            BaselinesGPUStats = Helper.ArrayOfFunction(i => (int)GPU.GetFreeMemory(i), GPU.GetDeviceCount());
-
+            
             TimerGPUStats = new DispatcherTimer(new TimeSpan(0, 0, 0, 0, 200), DispatcherPriority.Background, (a, b) =>
             {
                 for (int i = 0; i < CheckboxesGPUStats.Length; i++)
                 {
                     int CurrentMemory = (int)GPU.GetFreeMemory(i);
                     CheckboxesGPUStats[i].Content = $"GPU {i}: {CurrentMemory} MB";
+                }
+            }, Dispatcher);
 
-                    //float Full = 1 - (float)CurrentMemory / BaselinesGPUStats[i];
-                    //Color ColorFull = Color.FromRgb((byte)MathHelper.Lerp(Colors.White.R, Colors.DeepPink.R, Full),
-                    //                                (byte)MathHelper.Lerp(Colors.White.G, Colors.DeepPink.G, Full),
-                    //                                (byte)MathHelper.Lerp(Colors.White.B, Colors.DeepPink.B, Full));
-                    //SolidColorBrush BrushFull = new SolidColorBrush(ColorFull);
-                    //BrushFull.Freeze();
-                    //CheckboxesGPUStats[i].Foreground = BrushFull;
+            TimerProcessTiltSeries = new DispatcherTimer(new TimeSpan(0, 0, 0, 2, 0), DispatcherPriority.Background, (a,b) =>
+            {
+                if (IsPreprocessing && !Options.Import.ExtensionTomoSTAR)
+                {
+                    Options.TiltSeries.RunQueue();
+                }
+            }, Dispatcher);
+
+            SessionManagerTimer = new DispatcherTimer(new TimeSpan(0, 0, 0, 10, 0), DispatcherPriority.Background, (a, b) =>
+            {
+                if (IsPreprocessing)
+                {
+                    sessionManager.SessionLoop(EPUSessionCancellationToken.Token);
                 }
             }, Dispatcher);
 
@@ -151,11 +189,13 @@ namespace Warp
             {
                 GridOptionsIO,
                 GridOptionsIOTomo,
+                InvertAnglesCheckBox,
                 GridOptionsPreprocessing,
                 GridOptionsCTF,
                 GridOptionsMovement,
                 GridOptionsGrids,
                 GridOptionsPicking,
+                GridOptionsOpticGroupsCheckBox,
                 GridOptionsPostprocessing,
                 ButtonOptionsSave,
                 ButtonOptionsLoad,
@@ -166,13 +206,18 @@ namespace Warp
                 SwitchProcessMovement,
                 SwitchProcessPicking,
                 PanelOverviewTasks2D,
-                PanelOverviewTasks3D
+                PanelOverviewTasks3D,
+                PanelProcessStacker,
+                GridOptionsStacker,
+                //PanelProcessClassification,
+                //GridOptionsClassificationRow0
             };
             DisableWhenPreprocessing.AddRange(CheckboxesGPUStats);
 
             HideWhen2D = new List<UIElement>
             {
                 GridOptionsIOTomo,
+                InvertAnglesCheckBox,
                 PanelOverviewTasks3D,
                 ButtonProcessOneItemTiltHandedness
             };
@@ -190,7 +235,7 @@ namespace Warp
                 GridOptionsMovement,
                 LabelModelsHeader,
                 GridOptionsGrids,
-                GridOptionsPicking,
+                GridOptionsOpticGroups,
                 PanelProcessPicking,
                 LabelOutputHeader,
                 GridOptionsPostprocessing,
@@ -360,6 +405,8 @@ namespace Warp
                 }
             }
 
+            Options.Classification.Server = GlobalOptions.ClassificationUrl;
+
             #endregion
 
             #region Test stuff
@@ -372,10 +419,36 @@ namespace Warp
             #endregion
         }
 
+        private void SessionManager_PropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == "IsClassificationRunning")
+            {
+                if (sessionManager.IsClassificationRunning)
+                {
+                    ButtonDoClassificationNow.IsEnabled = false;
+                    ButtonDoClassificationNowText.Text = "Running";
+                } else
+                {
+                    ButtonDoClassificationNow.IsEnabled = true;
+                    ButtonDoClassificationNowText.Text = "Run now";
+                }
+            }
+        }
+
+        private void OnTiltSeriesCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+        {
+            LogToFile("Tilt series collection changed");
+            UpdateStatsStatus();
+        }
+
         private void MainWindow_Closing(object sender, CancelEventArgs e)
         {
             try
             {
+                EPUSessionCancellationToken.Cancel();
+                EPUSessionCancellationToken.Dispose();
+                sessionManager.SwitchSessionCancellationTokenSource.Cancel();
+                sessionManager.SwitchSessionCancellationTokenSource.Dispose();
                 SaveDefaultSettings();
                 FileDiscoverer.Shutdown();
             }
@@ -511,31 +584,34 @@ namespace Warp
 
         #region Helper variables
 
-        const string DefaultOptionsName = "previous.settings";
+        const string DefaultOptionsName = "custom_previous.settings";
 
         public static Options Options = new Options();
         static bool OptionsAutoSave = false;
         public static bool OptionsLookForFolderOptions = false;
 
+        public bool InvertAngles = false;
+
         #endregion
 
         private async void Options_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
-            if (e.PropertyName == "Import.Folder")
+            if (e.PropertyName == "Import.UserFolder")
             {
-                if (!IOHelper.CheckFolderPermission(Options.Import.Folder))
+                if (!IOHelper.CheckFolderPermission(Options.Import.UserFolder))
                 {
-                    Options.Import.Folder = "";
+                    Options.Import.UserFolder = "";
                     return;
                 }
-                ButtonInputPathText.Text = Options.Import.Folder == "" ? "Select folder..." : Options.Import.Folder;
-                ButtonInputPathText.ToolTip = Options.Import.Folder == "" ? "" : Options.Import.Folder;
-
-                if (OptionsLookForFolderOptions)
+                ButtonInputPathText.Text = Options.Import.UserFolder == "" ? "Select folder..." : Options.Import.UserFolder;
+                ButtonInputPathText.ToolTip = Options.Import.UserFolder == "" ? "" : Options.Import.UserFolder;
+                //sessionManager.ChangedImportFolder();
+                Options.TiltSeries.MdocFilesDirectory = Options.Import.UserFolder;
+                if (OptionsLookForFolderOptions && !Options.Stacker.GridScreening && sessionManager.CanLoadDefaultOptions)
                 {
                     OptionsLookForFolderOptions = false;
 
-                    if (File.Exists(Options.Import.Folder + DefaultOptionsName))
+                    if (File.Exists(Options.Import.UserFolder + DefaultOptionsName))
                     {
                         var MessageResult = await this.ShowMessageAsync("Options File Found in Folder",
                                                                         "A file with options from a previous Warp session was found in this folder. Load it?",
@@ -548,19 +624,29 @@ namespace Warp
 
                         if (MessageResult == MessageDialogResult.Affirmative)
                         {
-                            string SelectedFolder = Options.Import.Folder;
-
-                            Options.Load(Options.Import.Folder + DefaultOptionsName);
-
-                            Options.Import.Folder = SelectedFolder;
+                            string SelectedFolder = Options.Import.UserFolder;
+                            Options.Load(Options.Import.UserFolder + DefaultOptionsName);
+                            Options.Import.UserFolder = SelectedFolder;
                         }
                     }
 
                     OptionsLookForFolderOptions = true;
                 }
-
+            }
+            else if (e.PropertyName == "Import.InvertAngles")
+            {
+                InvertAngles = Options.Import.InvertAngles;
+            }
+            else if (e.PropertyName == "Import.Folder")
+            {
+                LogToFile("Adjust input");
                 AdjustInput();
-                TomoAdjustInterface();
+                sessionManager.NeedsNewOpticsGroup = true;
+                //TomoAdjustInterface();
+            }
+            else if (e.PropertyName == "Import.MicroscopePCFolder")
+            {
+                ButtonMicroscopePCPathText.Text = Options.Import.MicroscopePCFolder == "" ? "Microscope PC folder..." : Options.Import.MicroscopePCFolder;
             }
             else if (e.PropertyName == "Import.Extension")
             {
@@ -670,7 +756,87 @@ namespace Warp
                 ButtonPickingModelNameText.Text = Options.Picking.ModelPath == "" ? "Select BoxNet model..." : Options.Picking.ModelPath;
                 MicrographDisplayControl.UpdateBoxNetName(Options.Picking.ModelPath);
             }
-
+            else if (e.PropertyName == "Picking.WriteOpticGroupsN")
+            {
+                sessionManager.NeedsNewOpticsGroup = true;
+            }
+			else if (e.PropertyName == "Stacker.Folder")
+			{
+				ButtonStackerPathText.Text = Options.Stacker.Folder == "" ? "Select folder..." : Options.Stacker.Folder;
+			}
+            else if (e.PropertyName == "Classification.Results")
+            {
+                ButtonClassificationResultsText.Text = Options.Classification.Results;
+            }
+            else if (e.PropertyName == "Classification.DoManualClassification")
+            {
+                if (Options.Classification.DoManualClassification)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        ButtonDoClassificationNow.IsEnabled = true;
+                        ButtonDoClassificationNow.Content = "Run now";
+                    });
+                } else
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        ButtonDoClassificationNow.IsEnabled = false;
+                        ButtonDoClassificationNow.Content = "Auto";
+                    });
+                }
+            }
+            else if (e.PropertyName == "Classification.Countdown")
+            {
+                Dispatcher.Invoke(() =>
+                {
+                   ButtonTimeToNextClassificationText.Text = Options.Classification.Countdown;
+                });
+            }
+            else if (e.PropertyName == "SshSettings.SshKey")
+            {
+                ButtonSshKeyText.Text = Options.SshSettings.SshKey == "" ? "Select SSH key..." : Options.SshSettings.SshKey;
+                Task.Run(() =>
+               {
+                   Options.SshSettings.TestLinuxServerConnection();
+               });
+            }
+            else if (e.PropertyName == "SshSettings.LinuxPath")
+            {
+                Task.Run(() =>
+                {
+                    Options.SshSettings.TestLinuxServerConnection();
+                });
+            }
+            else if (e.PropertyName == "SshSettings.Username")
+            {
+                Task.Run(() =>
+                {
+                    Options.SshSettings.TestLinuxServerConnection();
+                });
+            }
+            else if (e.PropertyName == "SshSettings.IP")
+            {
+                Task.Run(() =>
+                {
+                    Options.SshSettings.TestLinuxServerConnection();
+                });
+            }
+            else if (e.PropertyName == "SshSettings.Auto")
+            {
+                Options.TiltSeries.ConnectionSettings = Options.SshSettings;
+            }
+            else if (e.PropertyName == "SshSettings.LinuxServerOk")
+            {
+                if (Options.SshSettings.LinuxServerOk)
+                {
+                    UpdateSshGpus();
+                }
+            }
+            else if (e.PropertyName == "TiltSeries.TiltSeriesList")
+            {
+                UpdateStatsStatus();
+            }
             if (OptionsAutoSave && !e.PropertyName.StartsWith("Tasks"))
             {
                 Dispatcher.Invoke(() =>
@@ -712,6 +878,21 @@ namespace Warp
             SaveDefaultSettings();
         }
 
+		private void OptionsStacker_PropertyChanged(object sender, PropertyChangedEventArgs e)
+		{
+			SaveDefaultSettings();
+		}
+
+		private void OptionsClassification_PropertyChanged(object sender, PropertyChangedEventArgs e)
+		{
+			SaveDefaultSettings();
+        }
+
+        private void OptionsSshSettings_PropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            SaveDefaultSettings();
+        }
+        
         private void OptionsExport_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
             SaveDefaultSettings();
@@ -756,7 +937,7 @@ namespace Warp
                 if (Options.Import.Folder != "")
                     try
                     {
-                        Options.Save(Options.Import.Folder + DefaultOptionsName);
+                        Options.Save(Options.Import.Folder.TrimEnd('\\') + @"\" + DefaultOptionsName);
                     } catch { }
             }
         }
@@ -817,7 +998,7 @@ namespace Warp
         {
             System.Windows.Forms.FolderBrowserDialog Dialog = new System.Windows.Forms.FolderBrowserDialog
             {
-                SelectedPath = Options.Import.Folder
+                SelectedPath = Options.Import.UserFolder
             };
             System.Windows.Forms.DialogResult Result = Dialog.ShowDialog();
 
@@ -833,7 +1014,7 @@ namespace Warp
                     Dialog.SelectedPath += '\\';
 
                 OptionsAutoSave = false;
-                Options.Import.Folder = Dialog.SelectedPath;
+                Options.Import.UserFolder = Dialog.SelectedPath;
                 OptionsAutoSave = true;
             }
         }
@@ -856,6 +1037,31 @@ namespace Warp
             {
                 Options.Import.GainPath = Dialog.FileName;
                 Options.Import.CorrectGain = true;
+            }
+        }
+
+        private void ButtonClassificationResults_OnClick(object sender, RoutedEventArgs e)
+        {
+            string uri = ButtonClassificationResultsText.Text;
+            if  (Uri.IsWellFormedUriString(uri, UriKind.RelativeOrAbsolute))
+            {
+                if (!uri.StartsWith("http://")) { uri = "http://" + uri; }
+                    Process.Start(uri);
+            }
+            
+        }
+
+        private void ButtonOpticGroups_OnClick(object sender, RoutedEventArgs e)
+        {
+            string opticGroupsPlot = Path.GetFullPath(Options.Import.Folder).TrimEnd(Path.DirectorySeparatorChar) + @"\opticsGroups.png";
+            LogToFile("Clicked button: "+ opticGroupsPlot);
+            if (File.Exists(opticGroupsPlot))
+            {
+                LogToFile("File exists");
+                Process.Start(opticGroupsPlot);
+            } else
+            {
+                LogToFile("File does not exist");
             }
         }
 
@@ -1056,7 +1262,32 @@ namespace Warp
             this.ShowMetroDialogAsync(Dialog);
         }
 
-        public string LocatePickingModel(string name)
+		private void ButtonStackerPath_OnClick(object sender, RoutedEventArgs e)
+		{
+			System.Windows.Forms.FolderBrowserDialog Dialog = new System.Windows.Forms.FolderBrowserDialog
+			{
+				SelectedPath = "C:\\"
+			};
+			System.Windows.Forms.DialogResult Result = Dialog.ShowDialog();
+
+			if (Result.ToString() == "OK")
+			{
+				if (!IOHelper.CheckFolderPermission(Dialog.SelectedPath))
+				{
+					MessageBox.Show("Don't have permission to access the selected folder.");
+					return;
+				}
+
+				if (Dialog.SelectedPath[Dialog.SelectedPath.Length - 1] != '\\')
+					Dialog.SelectedPath += '\\';
+
+				OptionsAutoSave = false;
+				Options.Stacker.Folder = Dialog.SelectedPath;
+				OptionsAutoSave = true;
+			}
+		}
+
+		public string LocatePickingModel(string name)
         {
             if (string.IsNullOrEmpty(name))
                 return null;
@@ -1077,20 +1308,78 @@ namespace Warp
 
         #endregion
 
+        public void StartProcessing(object sender, RoutedEventArgs e)
+        {
+            while (true) {
+                if (!IsPreprocessing && !IsStoppingPreprocessing) {
+                    //Dispatcher.InvokeAsync(() => ButtonStartProcessing_OnClick(null, null));
+                    Dispatcher.InvokeAsync(() => processMovies(null, null));
+                    break;
+                }
+                Thread.Sleep(1000);
+            }
+        }
+
+        public void StopProcessing(object sender, RoutedEventArgs e)
+        {
+            while (true)
+            {
+                if (IsPreprocessing && !IsStoppingPreprocessing) {
+                    //Dispatcher.InvokeAsync(() => ButtonStartProcessing_OnClick(null, null));
+                    Dispatcher.InvokeAsync(() => processMovies(null, null));
+                    break;
+                }
+                if (!IsPreprocessing) break;
+                Thread.Sleep(1000);
+            }
+
+        }
+
         public void StartProcessing()
         {
-            if (!IsPreprocessing && !IsStoppingPreprocessing)
-                Dispatcher.InvokeAsync(() => ButtonStartProcessing_OnClick(null, null));
+            StartProcessing(null, null);
         }
 
         public void StopProcessing()
         {
-            if (IsPreprocessing && !IsStoppingPreprocessing)
-                Dispatcher.InvokeAsync(() => ButtonStartProcessing_OnClick(null, null));
+            StopProcessing(null, null);
         }
 
-        private async void ButtonStartProcessing_OnClick(object sender, RoutedEventArgs e)
+        private void ButtonStartProcessing_OnClick(object sender, RoutedEventArgs e)
         {
+            if (!IsPreprocessing && !sessionManager.Waiting)
+            {
+                sessionManager.Activate();
+            } else
+            {
+                sessionManager.Hibernate();
+                if (sessionManager.FileWatcher != null) sessionManager.FileWatcher.Dispose();
+                if (sessionManager.Waiting)
+                {
+                    ButtonStartProcessing.IsEnabled = true;
+                    ButtonStartProcessing.Content = "START PROCESSING";
+                    ButtonStartProcessing.Foreground = new LinearGradientBrush(Colors.DeepSkyBlue, Colors.DeepPink, 0);
+                }
+                sessionManager.Waiting = false;
+            }
+        }
+
+        private string movieToMicrographName(string movieName)
+        {
+            string micrographName = Helper.PathToName(movieName) + @".mrc";
+            return (micrographName);
+        }
+
+        private string micrographToMovieName(string micrographName)
+        {
+            string movieName = Helper.PathToName(micrographName) + Options.Import.Extension.Substring(1);
+            return (movieName);
+        }
+
+        private async void processMovies(object sender, RoutedEventArgs e)
+        {
+            Dictionary<Movie, List<List<string>>> NeedsNewOpticsGroup = new Dictionary<Movie, List<List<string>>>();
+
             if (!IsPreprocessing)
             {
                 foreach (var item in DisableWhenPreprocessing)
@@ -1100,10 +1389,11 @@ namespace Warp
                 ButtonStartProcessing.Content = "STOP PROCESSING";
                 ButtonStartProcessing.Foreground = Brushes.Red;
                 IsPreprocessing = true;
+                Options.IsProcessing = true;
 
                 bool IsTomo = Options.Import.ExtensionTomoSTAR;
 
-                PreprocessingTask = Task.Run(async () =>
+				PreprocessingTask = Task.Run(async () =>
                 {
                     int NDevices = GPU.GetDeviceCount();
                     List<int> UsedDevices = GetDeviceList();
@@ -1219,18 +1509,23 @@ namespace Warp
                     string BoxNetSuffix = Helper.PathToNameWithExtension(Options.Picking.ModelPath);
 
                     Star TableBoxNetAll = null;
-                    string PathBoxNetAll = Options.Import.Folder + "allparticles_" + BoxNetSuffix + ".star";
-                    string PathBoxNetAllSubset = Options.Import.Folder + "allparticles_last" + Options.Picking.RunningWindowLength + "_" + BoxNetSuffix + ".star";
-                    string PathBoxNetFiltered = Options.Import.Folder + "goodparticles_" + BoxNetSuffix + ".star";
-                    string PathBoxNetFilteredSubset = Options.Import.Folder + "goodparticles_last" + Options.Picking.RunningWindowLength + "_" + BoxNetSuffix + ".star";
+                    string PathBoxNetAll = Path.Combine(Options.Import.Folder, "allparticles_" + BoxNetSuffix + ".star");
+                    string PathBoxNetAllSubset = Path.Combine(Options.Import.Folder, "allparticles_last" + Options.Picking.RunningWindowLength + "_" + BoxNetSuffix + ".star");
+                    string PathBoxNetFiltered = Path.Combine(Options.Import.Folder, "goodparticles_" + BoxNetSuffix + ".star");
+                    if (Options.ProcessClassification)
+                    {
+                        sessionManager.PathBoxNetFiltered = PathBoxNetFiltered;
+                    }
+                    string PathBoxNetFilteredSubset = Path.Combine(Options.Import.Folder, "goodparticles_last" + Options.Picking.RunningWindowLength + "_" + BoxNetSuffix + ".star");
                     object TableBoxNetAllWriteLock = new object();
                     int TableBoxNetConcurrent = 0;
-
+                    
                     // Switch filter suffix to the one used in current processing
                     //if (Options.ProcessPicking)
                     //    Dispatcher.Invoke(() => Options.Filter.ParticlesSuffix = "_" + BoxNetSuffix);
 
                     Dictionary<Movie, List<List<string>>> AllMovieParticleRows = new Dictionary<Movie, List<List<string>>>();
+                    string og = "0";
 
                     if (!IsTomo && Options.ProcessPicking && Options.Picking.DoExport && !string.IsNullOrEmpty(Options.Picking.ModelPath))
                     {
@@ -1238,35 +1533,66 @@ namespace Warp
 
                         if (File.Exists(PathBoxNetAll))
                         {
-                            ProgressDialogController ProgressDialog = null;
-                            await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Loading particle metadata from previous run...", ""));
-                            ProgressDialog.SetIndeterminate();
-
-                            TableBoxNetAll = new Star(PathBoxNetAll);
-
-                            Dictionary<string, Movie> NameMapping = new Dictionary<string, Movie>();
-                            string[] ColumnMicName = TableBoxNetAll.GetColumn("rlnMicrographName");
-                            for (int r = 0; r < ColumnMicName.Length; r++)
+                            TableBoxNetAll = new Star(PathBoxNetAll, "particles");
+                            if (TableBoxNetAll.RowCount == 0) { TableBoxNetAll = new Star(PathBoxNetAll); }
+                            //TableBoxNetAll = new Star(PathBoxNetAll);
+                            LogToFile("TableBoxNetAll.RowCount is " + TableBoxNetAll.RowCount.ToString());
+                            if (TableBoxNetAll.RowCount < 2)
                             {
-                                if (!NameMapping.ContainsKey(ColumnMicName[r]))
-                                {
-                                    var Movie = TempMovies.Where(m => ColumnMicName[r].Contains(m.Name));
-                                    if (Movie.Count() != 1)
-                                        continue;
-
-                                    NameMapping.Add(ColumnMicName[r], Movie.First());
-                                    AllMovieParticleRows.Add(Movie.First(), new List<List<string>>());
-                                }
-
-                                AllMovieParticleRows[NameMapping[ColumnMicName[r]]].Add(TableBoxNetAll.GetRow(r));
+                                File.Delete(PathBoxNetAll);
+                                TableBoxNetAll = new Star(new string[] { });
                             }
+                            else{
+                                ProgressDialogController ProgressDialog = null;
+                                await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Loading particle metadata from previous run...", ""));
+                                ProgressDialog.SetIndeterminate();
 
-                            await ProgressDialog.CloseAsync();
+                                //Original WARP code
+                                /*
+                                Dictionary<string, Movie> NameMapping = new Dictionary<string, Movie>();
+                                string[] ColumnMicName = TableBoxNetAll.GetColumn("rlnMicrographName");
+                                ColumnMicName = ColumnMicName.Select( x => micrographToMovieName(x)).ToArray();
+
+                                for (int r = 0; r < ColumnMicName.Length; r++)
+                                {
+                                    if (!NameMapping.ContainsKey(ColumnMicName[r]))
+                                    {
+                                        var Movie = TempMovies.Where(m => ColumnMicName[r].Contains(m.Name));
+                                        if (Movie.Count() != 1)
+                                            continue;
+
+                                        NameMapping.Add(ColumnMicName[r], Movie.First());
+                                        AllMovieParticleRows.Add(Movie.First(), new List<List<string>>());
+                                    }
+
+                                    AllMovieParticleRows[NameMapping[ColumnMicName[r]]].Add(TableBoxNetAll.GetRow(r));
+                                }
+                                */
+
+                                // Optimized code using LINQ
+
+                                int ColumnIndex = TableBoxNetAll.GetColumnNames().ToList().IndexOf("rlnMicrographName");
+
+                                var AllParticlesDict = TableBoxNetAll
+                                    .GetAllRows()
+                                    .GroupBy(r => r[ColumnIndex])
+                                    .ToDictionary(
+                                        group => micrographToMovieName(group.Key),
+                                        group => group.ToList()
+                                    );
+
+                                AllMovieParticleRows = TempMovies
+                                    .Where(movie => AllParticlesDict.ContainsKey(movie.Name))
+                                    .ToDictionary(movie => movie, movie => AllParticlesDict[movie.Name]);
+
+                                await ProgressDialog.CloseAsync();
+                            }
                         }
                         else
                         {
                             TableBoxNetAll = new Star(new string[] { });
                         }
+
 
                         #region Make sure all columns are there
 
@@ -1282,9 +1608,9 @@ namespace Warp
                             TableBoxNetAll.SetColumn("rlnMagnification", Helper.ArrayOfConstant("10000.0", TableBoxNetAll.RowCount));
 
                         if (!TableBoxNetAll.HasColumn("rlnDetectorPixelSize"))
-                            TableBoxNetAll.AddColumn("rlnDetectorPixelSize", Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture));
+                            TableBoxNetAll.AddColumn("rlnDetectorPixelSize", Options.Picking.DoFourierCrop ? ((float)Options.BinnedPixelSizeMean * Options.Picking.BoxSize / Options.Picking.FourierCropBox).ToString("F5", CultureInfo.InvariantCulture) : Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture));
                         else
-                            TableBoxNetAll.SetColumn("rlnDetectorPixelSize", Helper.ArrayOfConstant(Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture), TableBoxNetAll.RowCount));
+                            TableBoxNetAll.SetColumn("rlnDetectorPixelSize", Helper.ArrayOfConstant(Options.Picking.DoFourierCrop ? ((float)Options.BinnedPixelSizeMean * Options.Picking.BoxSize / Options.Picking.FourierCropBox).ToString("F5", CultureInfo.InvariantCulture) : Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture), TableBoxNetAll.RowCount));
 
                         if (!TableBoxNetAll.HasColumn("rlnVoltage"))
                             TableBoxNetAll.AddColumn("rlnVoltage", "300.0");
@@ -1316,11 +1642,19 @@ namespace Warp
                         if (!TableBoxNetAll.HasColumn("rlnMicrographName"))
                             TableBoxNetAll.AddColumn("rlnMicrographName", "None");
 
+                        if (Options.Picking.WriteOpticGroups) {
+                            if (!TableBoxNetAll.HasColumn("rlnOpticsGroup"))
+                                TableBoxNetAll.AddColumn("rlnOpticsGroup", "0");
+                        } else if (TableBoxNetAll.HasColumn("rlnOpticsGroup"))
+                        {
+                            TableBoxNetAll.RemoveColumn("rlnOpticsGroup");
+                        }
                         #endregion
-
+                       
                         #region Repair
 
                         var RepairMovies = TempMovies.Where(m => !AllMovieParticleRows.ContainsKey(m) && m.OptionsBoxNet != null && File.Exists(m.MatchingDir + m.RootName + "_" + BoxNetSuffix + ".star")).ToList();
+                        Console.WriteLine($"Repairing {RepairMovies.Count} movies");
                         if (RepairMovies.Count() > 0)
                         {
                             ProgressDialogController ProgressDialog = null;
@@ -1342,12 +1676,15 @@ namespace Warp
                                 float PhaseShift = item.GridCTFPhase.GetInterpolated(new float3(0.5f)) * 180;
 
                                 List<List<string>> NewRows = new List<List<string>>();
+                                //if (Options.Picking.WriteOpticGroups) { og = sessionManager.GetOpticsGroup(item.Name); }
                                 for (int r = 0; r < Positions.Length; r++)
                                 {
                                     string[] Row = Helper.ArrayOfConstant("0", TableBoxNetAll.ColumnCount);
 
                                     Row[TableBoxNetAll.GetColumnID("rlnMagnification")] = "10000.0";
-                                    Row[TableBoxNetAll.GetColumnID("rlnDetectorPixelSize")] = item.OptionsBoxNet.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture);
+                                    //Row[TableBoxNetAll.GetColumnID("rlnDetectorPixelSize")] = item.OptionsBoxNet.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture);
+                                    Row[TableBoxNetAll.GetColumnID("rlnDetectorPixelSize")] = Options.Picking.DoFourierCrop ? ((float)Options.BinnedPixelSizeMean * Options.Picking.BoxSize / Options.Picking.FourierCropBox).ToString("F5", CultureInfo.InvariantCulture) : Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture);
+
 
                                     Row[TableBoxNetAll.GetColumnID("rlnDefocusU")] = ((Defoci[r] + Astigmatism) * 1e4f).ToString("F1", CultureInfo.InvariantCulture);
                                     Row[TableBoxNetAll.GetColumnID("rlnDefocusV")] = ((Defoci[r] - Astigmatism) * 1e4f).ToString("F1", CultureInfo.InvariantCulture);
@@ -1360,7 +1697,11 @@ namespace Warp
                                     Row[TableBoxNetAll.GetColumnID("rlnCoordinateX")] = Positions[r].X.ToString("F2", CultureInfo.InvariantCulture);
                                     Row[TableBoxNetAll.GetColumnID("rlnCoordinateY")] = Positions[r].Y.ToString("F2", CultureInfo.InvariantCulture);
                                     Row[TableBoxNetAll.GetColumnID("rlnImageName")] = (r + 1).ToString("D7") + "@particles/" + item.RootName + "_" + BoxNetSuffix + ".mrcs";
-                                    Row[TableBoxNetAll.GetColumnID("rlnMicrographName")] = item.Name;
+                                    Row[TableBoxNetAll.GetColumnID("rlnMicrographName")] = movieToMicrographName(item.Name);
+                                    /*if (Options.Picking.WriteOpticGroups)
+                                    {
+                                        Row[TableBoxNetAll.GetColumnID("rlnOpticsGroup")] = og;
+                                    }*/
 
                                     NewRows.Add(Row.ToList());
                                 }
@@ -1369,11 +1710,12 @@ namespace Warp
 
                                 NRepaired++;
                                 Dispatcher.Invoke(() => ProgressDialog.SetProgress((float)NRepaired / RepairMovies.Count));
+                                Console.WriteLine($"Repaired {NRepaired}/{RepairMovies.Count}");
                             }
 
                             await ProgressDialog.CloseAsync();
                         }
-
+                        
                         #endregion
                     }
 
@@ -1406,8 +1748,11 @@ namespace Warp
 
                     while (true)
                     {
+
                         if (!IsPreprocessing)
                             break;
+
+                        await Task.Delay(20);
 
                         #region Figure out what needs preprocessing
 
@@ -1435,7 +1780,6 @@ namespace Warp
 
                         if (NeedProcessing.Count == 0)
                         {
-                            await Task.Delay(20);
                             continue;
                         }
 
@@ -1490,151 +1834,151 @@ namespace Warp
 
                         Helper.ForEachGPU(NeedProcessing, (item, gpuID) =>
                         {
-                            if (!IsPreprocessing)
-                                return true;    // This cancels the iterator
+                        if (!IsPreprocessing)
+                            return true;    // This cancels the iterator
 
-                            Image OriginalStack = null;
+                        Image OriginalStack = null;
 
-                            try
+                        try
+                        {
+                            var TimerOverall = BenchmarkAllProcessing.Start();
+
+                            ProcessingOptionsMovieCTF CurrentOptionsCTF = Options.GetProcessingMovieCTF();
+                            ProcessingOptionsMovieMovement CurrentOptionsMovement = Options.GetProcessingMovieMovement();
+                            ProcessingOptionsBoxNet CurrentOptionsBoxNet = Options.GetProcessingBoxNet();
+                            ProcessingOptionsMovieExport CurrentOptionsExport = Options.GetProcessingMovieExport();
+
+                            bool DoExport = OptionsExport.DoAverage || OptionsExport.DoStack || OptionsExport.DoDeconv || (DoPicking && !File.Exists(item.AveragePath));
+
+                            bool NeedsNewCTF = CurrentOptionsCTF != item.OptionsCTF && DoCTF;
+                            bool NeedsNewMotion = CurrentOptionsMovement != item.OptionsMovement && DoMovement;
+                            bool NeedsNewPicking = DoPicking &&
+                                                   (CurrentOptionsBoxNet != item.OptionsBoxNet ||
+                                                    NeedsNewMotion);
+                            bool NeedsNewExport = DoExport &&
+                                                  (NeedsNewMotion ||
+                                                   CurrentOptionsExport != item.OptionsMovieExport ||
+                                                   (CurrentOptionsExport.DoDeconv && NeedsNewCTF));
+
+                            bool NeedsMoreDenoisingExamples = !Directory.Exists(item.DenoiseTrainingDirOdd) ||
+                                                             Directory.EnumerateFiles(item.DenoiseTrainingDirOdd, "*.mrc").Count() < 128;   // Having more than 128 examples is a waste of space
+                            bool DoesDenoisingExampleExist = File.Exists(item.DenoiseTrainingOddPath);
+                            bool NeedsDenoisingExample = NeedsMoreDenoisingExamples || (DoesDenoisingExampleExist && (NeedsNewCTF || NeedsNewExport));
+                            CurrentOptionsExport.DoDenoise = NeedsDenoisingExample;
+
+                            MapHeader OriginalHeader = null;
+                            decimal ScaleFactor = 1M / (decimal)Math.Pow(2, (double)Options.Import.BinTimes);
+
+                            bool NeedStack = NeedsNewCTF ||
+                                             NeedsNewMotion ||
+                                             NeedsNewExport ||
+                                             (NeedsNewPicking && CurrentOptionsBoxNet.ExportParticles);
+
+                            if (!IsTomo)
                             {
-                                var TimerOverall = BenchmarkAllProcessing.Start();
+                                Debug.WriteLine(GPU.GetDevice() + " loading...");
+                                var TimerRead = BenchmarkRead.Start();
 
-                                ProcessingOptionsMovieCTF CurrentOptionsCTF = Options.GetProcessingMovieCTF();
-                                ProcessingOptionsMovieMovement CurrentOptionsMovement = Options.GetProcessingMovieMovement();
-                                ProcessingOptionsBoxNet CurrentOptionsBoxNet = Options.GetProcessingBoxNet();
-                                ProcessingOptionsMovieExport CurrentOptionsExport = Options.GetProcessingMovieExport();
+                                LoadAndPrepareHeaderAndMap(item.Path, ImageGain, DefectMap, ScaleFactor, out OriginalHeader, out OriginalStack, false);
+                                if (NeedStack)
+                                    Workers[gpuID].LoadStack(item.Path, ScaleFactor, CurrentOptionsExport.EERGroupFrames);
 
-                                bool DoExport = OptionsExport.DoAverage || OptionsExport.DoStack || OptionsExport.DoDeconv || (DoPicking && !File.Exists(item.AveragePath));
+                                BenchmarkRead.Finish(TimerRead);
+                                Debug.WriteLine(GPU.GetDevice() + " loaded.");
+                            }
 
-                                bool NeedsNewCTF = CurrentOptionsCTF != item.OptionsCTF && DoCTF;
-                                bool NeedsNewMotion = CurrentOptionsMovement != item.OptionsMovement && DoMovement;
-                                bool NeedsNewPicking = DoPicking &&
-                                                       (CurrentOptionsBoxNet != item.OptionsBoxNet ||
-                                                        NeedsNewMotion);
-                                bool NeedsNewExport = DoExport &&
-                                                      (NeedsNewMotion ||
-                                                       CurrentOptionsExport != item.OptionsMovieExport ||
-                                                       (CurrentOptionsExport.DoDeconv && NeedsNewCTF));
+                            // Store original dimensions in Angstrom
+                            if (!IsTomo)
+                            {
+                                CurrentOptionsCTF.Dimensions = OriginalHeader.Dimensions.MultXY((float)Options.PixelSizeMean);
+                                CurrentOptionsMovement.Dimensions = OriginalHeader.Dimensions.MultXY((float)Options.PixelSizeMean);
+                                CurrentOptionsBoxNet.Dimensions = OriginalHeader.Dimensions.MultXY((float)Options.PixelSizeMean);
+                                CurrentOptionsExport.Dimensions = OriginalHeader.Dimensions.MultXY((float)Options.PixelSizeMean);
+                            }
+                            else
+                            {
+                                ((TiltSeries)item).LoadMovieSizes(CurrentOptionsCTF);
 
-                                bool NeedsMoreDenoisingExamples = !Directory.Exists(item.DenoiseTrainingDirOdd) || 
-                                                                 Directory.EnumerateFiles(item.DenoiseTrainingDirOdd, "*.mrc").Count() < 128;   // Having more than 128 examples is a waste of space
-                                bool DoesDenoisingExampleExist = File.Exists(item.DenoiseTrainingOddPath);
-                                bool NeedsDenoisingExample = NeedsMoreDenoisingExamples || (DoesDenoisingExampleExist && (NeedsNewCTF || NeedsNewExport));
-                                CurrentOptionsExport.DoDenoise = NeedsDenoisingExample;
+                                float3 StackDims = new float3(((TiltSeries)item).ImageDimensionsPhysical, ((TiltSeries)item).NTilts);
+                                CurrentOptionsCTF.Dimensions = StackDims;
+                                CurrentOptionsMovement.Dimensions = StackDims;
+                                CurrentOptionsExport.Dimensions = StackDims;
+                            }
 
-                                MapHeader OriginalHeader = null;
-                                decimal ScaleFactor = 1M / (decimal)Math.Pow(2, (double)Options.Import.BinTimes);
+                            Debug.WriteLine(GPU.GetDevice() + " processing...");
 
-                                bool NeedStack = NeedsNewCTF ||
-                                                 NeedsNewMotion ||
-                                                 NeedsNewExport ||
-                                                 (NeedsNewPicking && CurrentOptionsBoxNet.ExportParticles);
+                            if (!IsPreprocessing)
+                            {
+                                OriginalStack?.Dispose();
+                                return true;
+                            } // These checks are needed to abort the processing faster
+
+                            if (DoCTF && NeedsNewCTF)
+                            {
+                                var TimerCTF = BenchmarkCTF.Start();
 
                                 if (!IsTomo)
                                 {
-                                    Debug.WriteLine(GPU.GetDevice() + " loading...");
-                                    var TimerRead = BenchmarkRead.Start();
-
-                                    LoadAndPrepareHeaderAndMap(item.Path, ImageGain, DefectMap, ScaleFactor, out OriginalHeader, out OriginalStack, false);
-                                    if (NeedStack)
-                                        Workers[gpuID].LoadStack(item.Path, ScaleFactor, CurrentOptionsExport.EERGroupFrames);
-
-                                    BenchmarkRead.Finish(TimerRead);
-                                    Debug.WriteLine(GPU.GetDevice() + " loaded.");
-                                }
-
-                                // Store original dimensions in Angstrom
-                                if (!IsTomo)
-                                {
-                                    CurrentOptionsCTF.Dimensions = OriginalHeader.Dimensions.MultXY((float)Options.PixelSizeMean);
-                                    CurrentOptionsMovement.Dimensions = OriginalHeader.Dimensions.MultXY((float)Options.PixelSizeMean);
-                                    CurrentOptionsBoxNet.Dimensions = OriginalHeader.Dimensions.MultXY((float)Options.PixelSizeMean);
-                                    CurrentOptionsExport.Dimensions = OriginalHeader.Dimensions.MultXY((float)Options.PixelSizeMean);
+                                    Workers[gpuID].MovieProcessCTF(item.Path, CurrentOptionsCTF);
+                                    item.LoadMeta();
                                 }
                                 else
                                 {
-                                    ((TiltSeries)item).LoadMovieSizes(CurrentOptionsCTF);
-
-                                    float3 StackDims = new float3(((TiltSeries)item).ImageDimensionsPhysical, ((TiltSeries)item).NTilts);
-                                    CurrentOptionsCTF.Dimensions = StackDims;
-                                    CurrentOptionsMovement.Dimensions = StackDims;
-                                    CurrentOptionsExport.Dimensions = StackDims;
-                                }
-                                
-                                Debug.WriteLine(GPU.GetDevice() + " processing...");
-
-                                if (!IsPreprocessing)
-                                {
-                                    OriginalStack?.Dispose();
-                                    return true;
-                                } // These checks are needed to abort the processing faster
-
-                                if (DoCTF && NeedsNewCTF)
-                                {
-                                    var TimerCTF = BenchmarkCTF.Start();
-
-                                    if (!IsTomo)
-                                    {
-                                        Workers[gpuID].MovieProcessCTF(item.Path, CurrentOptionsCTF);
-                                        item.LoadMeta();
-                                    }
-                                    else
-                                    {
-                                        Workers[gpuID].TomoProcessCTF(item.Path, CurrentOptionsCTF);
-                                        item.LoadMeta();
-                                    }
-
-                                    BenchmarkCTF.Finish(TimerCTF);
-                                    GlobalOptions.LogProcessingCTF(CurrentOptionsCTF, item.CTF, (float)item.CTFResolutionEstimate);
-                                }
-                                if (!IsPreprocessing)
-                                {
-                                    OriginalStack?.Dispose();
-                                    return true;
-                                }
-
-                                if (DoMovement && NeedsNewMotion && !IsTomo)
-                                {
-                                    var TimerMotion = BenchmarkMotion.Start();
-
-                                    Workers[gpuID].MovieProcessMovement(item.Path, CurrentOptionsMovement);
+                                    Workers[gpuID].TomoProcessCTF(item.Path, CurrentOptionsCTF);
                                     item.LoadMeta();
-                                    //item.ProcessShift(OriginalStack, CurrentOptionsMovement);
-
-                                    BenchmarkMotion.Finish(TimerMotion);
-                                    GlobalOptions.LogProcessingMovement(CurrentOptionsMovement, (float)item.MeanFrameMovement);
-                                }
-                                if (!IsPreprocessing)
-                                {
-                                    OriginalStack?.Dispose();
-                                    return true;
                                 }
 
-                                if (DoExport && NeedsNewExport && !IsTomo)
-                                {
-                                    var TimerOutput = BenchmarkOutput.Start();
+                                BenchmarkCTF.Finish(TimerCTF);
+                                GlobalOptions.LogProcessingCTF(CurrentOptionsCTF, item.CTF, (float)item.CTFResolutionEstimate);
+                            }
+                            if (!IsPreprocessing)
+                            {
+                                OriginalStack?.Dispose();
+                                return true;
+                            }
 
-                                    Workers[gpuID].MovieExportMovie(item.Path, CurrentOptionsExport);
-                                    item.LoadMeta();
-                                    //item.ExportMovie(OriginalStack, CurrentOptionsExport);
+                            if (DoMovement && NeedsNewMotion && !IsTomo)
+                            {
+                                var TimerMotion = BenchmarkMotion.Start();
 
-                                    BenchmarkOutput.Finish(TimerOutput);
-                                }
+                                Workers[gpuID].MovieProcessMovement(item.Path, CurrentOptionsMovement);
+                                item.LoadMeta();
+                                //item.ProcessShift(OriginalStack, CurrentOptionsMovement);
 
-                                if (!File.Exists(item.ThumbnailsPath))
-                                    item.CreateThumbnail(384, 2.5f);
+                                BenchmarkMotion.Finish(TimerMotion);
+                                GlobalOptions.LogProcessingMovement(CurrentOptionsMovement, (float)item.MeanFrameMovement);
+                            }
+                            if (!IsPreprocessing)
+                            {
+                                OriginalStack?.Dispose();
+                                return true;
+                            }
 
-                                if (DoPicking && NeedsNewPicking && !IsTomo)
-                                {
-                                    var TimerPicking = BenchmarkPicking.Start();
+                            if (DoExport && NeedsNewExport && !IsTomo)
+                            {
+                                var TimerOutput = BenchmarkOutput.Start();
 
-                                    Image AverageForPicking = Image.FromFilePatient(50, 500, item.AveragePath);
+                                Workers[gpuID].MovieExportMovie(item.Path, CurrentOptionsExport);
+                                item.LoadMeta();
+                                //item.ExportMovie(OriginalStack, CurrentOptionsExport);
 
-                                    // Let only one process per GPU access BoxNet on that GPU, otherwise TF memory consumption can explode
-                                    lock (BoxNetLocks[gpuID % NDevices])
-                                        item.MatchBoxNet2(new[] { BoxNetworks[gpuID % NDevices] }, AverageForPicking, CurrentOptionsBoxNet, null);
+                                BenchmarkOutput.Finish(TimerOutput);
+                            }
 
-                                    GlobalOptions.LogProcessingBoxNet(CurrentOptionsBoxNet, item.GetParticleCount("_" + BoxNetSuffix));
+                            if (!File.Exists(item.ThumbnailsPath))
+                                item.CreateThumbnail(384, 2.5f);
+
+                            if (DoPicking && NeedsNewPicking && !IsTomo)
+                            {
+                                var TimerPicking = BenchmarkPicking.Start();
+
+                                Image AverageForPicking = Image.FromFilePatient(50, 500, item.AveragePath);
+
+                                // Let only one process per GPU access BoxNet on that GPU, otherwise TF memory consumption can explode
+                                lock (BoxNetLocks[gpuID % NDevices])
+                                    item.MatchBoxNet2(new[] { BoxNetworks[gpuID % NDevices] }, AverageForPicking, CurrentOptionsBoxNet, null);
+
+                                GlobalOptions.LogProcessingBoxNet(CurrentOptionsBoxNet, item.GetParticleCount("_" + BoxNetSuffix));
 
                                     #region Export particles if needed
 
@@ -1648,6 +1992,8 @@ namespace Warp
                                         {
                                             Suffix = "_" + BoxNetSuffix,
 
+                                            ParticleFourierCropBox = CurrentOptionsBoxNet.FourierCropBox,
+                                            DoFourierCrop = CurrentOptionsBoxNet.DoFourierCrop,
                                             BoxSize = CurrentOptionsBoxNet.ExportBoxSize,
                                             Diameter = (int)CurrentOptionsBoxNet.ExpectedDiameter,
                                             Invert = CurrentOptionsBoxNet.ExportInvert,
@@ -1691,12 +2037,13 @@ namespace Warp
                                         float PhaseShift = item.GridCTFPhase.GetInterpolated(new float3(0.5f)) * 180;
 
                                         List<List<string>> NewRows = new List<List<string>>();
+                                        if (Options.Picking.WriteOpticGroups) { og = sessionManager.GetOpticsGroup(item.Name); }
                                         for (int r = 0; r < Positions.Length; r++)
                                         {
                                             string[] Row = Helper.ArrayOfConstant("0", TableBoxNetAll.ColumnCount);
 
                                             Row[TableBoxNetAll.GetColumnID("rlnMagnification")] = "10000.0";
-                                            Row[TableBoxNetAll.GetColumnID("rlnDetectorPixelSize")] = Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture);
+                                            Row[TableBoxNetAll.GetColumnID("rlnDetectorPixelSize")] = Options.Picking.DoFourierCrop ? ((float)Options.BinnedPixelSizeMean * Options.Picking.BoxSize / Options.Picking.FourierCropBox).ToString("F5", CultureInfo.InvariantCulture) : Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture);
 
                                             Row[TableBoxNetAll.GetColumnID("rlnDefocusU")] = ((Defoci[r] + Astigmatism) * 1e4f).ToString("F1", CultureInfo.InvariantCulture);
                                             Row[TableBoxNetAll.GetColumnID("rlnDefocusV")] = ((Defoci[r] - Astigmatism) * 1e4f).ToString("F1", CultureInfo.InvariantCulture);
@@ -1709,14 +2056,33 @@ namespace Warp
                                             Row[TableBoxNetAll.GetColumnID("rlnCoordinateX")] = (Positions[r].X / (float)CurrentOptionsBoxNet.BinnedPixelSizeMean).ToString("F2", CultureInfo.InvariantCulture);
                                             Row[TableBoxNetAll.GetColumnID("rlnCoordinateY")] = (Positions[r].Y / (float)CurrentOptionsBoxNet.BinnedPixelSizeMean).ToString("F2", CultureInfo.InvariantCulture);
                                             Row[TableBoxNetAll.GetColumnID("rlnImageName")] = (r + 1).ToString("D7") + "@particles/" + item.RootName + "_" + BoxNetSuffix + ".mrcs";
-                                            Row[TableBoxNetAll.GetColumnID("rlnMicrographName")] = item.Name;
-
+                                            Row[TableBoxNetAll.GetColumnID("rlnMicrographName")] = movieToMicrographName(item.Name);
+                                            if (Options.Picking.WriteOpticGroups)
+                                            {
+                                                Row[TableBoxNetAll.GetColumnID("rlnOpticsGroup")] = og;
+                                            }
                                             NewRows.Add(Row.ToList());
                                         }
+
+                                        /*
+                                        if (Options.Picking.WriteOpticGroups)
+                                        {
+                                            if (!sessionManager.canaddopticgroups || og == "0")
+                                            {
+                                                lock (NeedsNewOpticsGroup)
+                                                {
+                                                    if (!NeedsNewOpticsGroup.ContainsKey(item))
+                                                    {
+                                                        NeedsNewOpticsGroup.Add(item, NewRows);
+                                                    }
+                                                }
+                                            }
+                                        }*/
 
                                         List<List<string>> RowsAll = new List<List<string>>();
                                         List<List<string>> RowsGood = new List<List<string>>();
 
+                                         
                                         lock (AllMovieParticleRows)
                                         {
                                             if (!AllMovieParticleRows.ContainsKey(item))
@@ -1727,76 +2093,116 @@ namespace Warp
                                             foreach (var pair in AllMovieParticleRows)
                                             {
                                                 RowsAll.AddRange(pair.Value);
+
+                                                ProcessingStatus Status = StatusBar.GetMovieProcessingStatus(pair.Key, OptionsCTF, OptionsMovement, OptionsBoxNet, OptionsExport, Options);
+                                                if (Status != ProcessingStatus.Processed)
+                                                {
+                                                    continue;
+                                                }
                                                 if (!(pair.Key.UnselectFilter || (pair.Key.UnselectManual != null && pair.Key.UnselectManual.Value)))
                                                     RowsGood.AddRange(pair.Value);
                                             }
                                         }
 
                                         if (TableBoxNetConcurrent == 0)
-                                        {
-                                            lock (TableBoxNetAllWriteLock)
-                                                TableBoxNetConcurrent++;
+                                            {
+                                                lock (TableBoxNetAllWriteLock)
+                                                    TableBoxNetConcurrent++;
 
                                             Task.Run(() =>
-                                            {
-                                                Star TempTableAll = new Star(TableBoxNetAll.GetColumnNames());
-                                                TempTableAll.AddRow(RowsAll);
-
-                                                bool SuccessAll = false;
-                                                while (!SuccessAll)
                                                 {
-                                                    try
+                                                    if (Options.Picking.WriteOpticGroups && sessionManager.NOpticsGroup > 0)
                                                     {
-                                                        TempTableAll.Save(PathBoxNetAll + "_" + item.RootName);
-                                                        lock (TableBoxNetAllWriteLock)
-                                                        {
-                                                            if (File.Exists(PathBoxNetAll))
-                                                                File.Delete(PathBoxNetAll);
-                                                            File.Move(PathBoxNetAll + "_" + item.RootName, PathBoxNetAll);
-
-                                                            if (Options.Picking.DoRunningWindow && TempTableAll.RowCount > 0)
-                                                            {
-                                                                TempTableAll.CreateSubset(Helper.ArrayOfSequence(Math.Max(0, TempTableAll.RowCount - Options.Picking.RunningWindowLength), 
-                                                                                                                 TempTableAll.RowCount - 1, 
-                                                                                                                 1)).Save(PathBoxNetAllSubset);
-                                                            }
-                                                        }
-                                                        SuccessAll = true;
+                                                        sessionManager.UpdateOpticsGroup();
                                                     }
-                                                    catch { }
-                                                }
 
-                                                Star TempTableGood = new Star(TableBoxNetAll.GetColumnNames());
-                                                TempTableGood.AddRow(RowsGood);
+                                                    Star TempTableAll = new Star(TableBoxNetAll.GetColumnNames());
+                                                    TempTableAll.AddRow(RowsAll);
 
-                                                bool SuccessGood = false;
-                                                while (!SuccessGood)
-                                                {
-                                                    try
+                                                    bool SuccessAll = false;
+                                                    while (!SuccessAll)
                                                     {
-                                                        TempTableGood.Save(PathBoxNetFiltered + "_" + item.RootName);
-                                                        lock (TableBoxNetAllWriteLock)
+                                                        try
                                                         {
-                                                            if (File.Exists(PathBoxNetFiltered))
-                                                                File.Delete(PathBoxNetFiltered);
-                                                            File.Move(PathBoxNetFiltered + "_" + item.RootName, PathBoxNetFiltered);
 
-                                                            if (Options.Picking.DoRunningWindow && TempTableGood.RowCount > 0)
+                                                            if (Options.Picking.WriteOpticGroups)
                                                             {
-                                                                TempTableGood.CreateSubset(Helper.ArrayOfSequence(Math.Max(0, TempTableGood.RowCount - Options.Picking.RunningWindowLength),
-                                                                                                                  TempTableGood.RowCount - 1,
-                                                                                                                  1)).Save(PathBoxNetFilteredSubset);
+                                                                sessionManager.OpticsGroupTable.Save(PathBoxNetAll + "_" + item.RootName, "optics", false);
+                                                                TempTableAll.Save(PathBoxNetAll + "_" + item.RootName, "particles", true);
                                                             }
-                                                        }
-                                                        SuccessGood = true;
-                                                    }
-                                                    catch { }
-                                                }
+                                                            else
+                                                            {
+                                                                TempTableAll.Save(PathBoxNetAll + "_" + item.RootName);
+                                                            }
+                                                            lock (TableBoxNetAllWriteLock)
+                                                            {
+                                                                if (File.Exists(PathBoxNetAll))
+                                                                {
+                                                                    File.Delete(PathBoxNetAll);
+                                                                }
+                                                                File.Move(PathBoxNetAll + "_" + item.RootName, PathBoxNetAll);
 
-                                                lock (TableBoxNetAllWriteLock)
-                                                    TableBoxNetConcurrent--;
-                                            });
-                                        }
+                                                                if (Options.Picking.DoRunningWindow && TempTableAll.RowCount > 0)
+                                                                {
+                                                                    TempTableAll.CreateSubset(Helper.ArrayOfSequence(Math.Max(0, TempTableAll.RowCount - Options.Picking.RunningWindowLength),
+                                                                                                                     TempTableAll.RowCount - 1,
+                                                                                                                     1)).Save(PathBoxNetAllSubset);
+                                                                }
+                                                            }
+                                                            SuccessAll = true;
+                                                        }
+                                                        catch { }
+                                                    }
+
+                                                    Star TempTableGood = new Star(TableBoxNetAll.GetColumnNames());
+                                                    TempTableGood.AddRow(RowsGood);
+
+                                                    if (Options.ProcessClassification)
+                                                    {
+                                                        sessionManager.NGoodParticles = RowsGood.Count();
+                                                        LogToFile("We have " + sessionManager.NGoodParticles.ToString() + " good particles.");
+                                                    }
+
+                                                    bool SuccessGood = false;
+                                                    while (!SuccessGood)
+                                                    {
+                                                        try
+                                                        {
+                                                            if (Options.Picking.WriteOpticGroups)
+                                                            {
+                                                                sessionManager.OpticsGroupTable.Save(PathBoxNetFiltered + "_" + item.RootName, "optics", false);
+                                                                TempTableGood.Save(PathBoxNetFiltered + "_" + item.RootName, "particles", true);
+                                                            }
+                                                            else
+                                                            {
+                                                                TempTableGood.Save(PathBoxNetFiltered + "_" + item.RootName);
+                                                            }
+
+                                                            //TempTableGood.Save(PathBoxNetFiltered + "_" + item.RootName);
+                                                            lock (TableBoxNetAllWriteLock)
+                                                            {
+                                                                if (File.Exists(PathBoxNetFiltered))
+                                                                    File.Delete(PathBoxNetFiltered);
+                                                                File.Move(PathBoxNetFiltered + "_" + item.RootName, PathBoxNetFiltered);
+
+                                                                if (Options.Picking.DoRunningWindow && TempTableGood.RowCount > 0)
+                                                                {
+                                                                    TempTableGood.CreateSubset(Helper.ArrayOfSequence(Math.Max(0, TempTableGood.RowCount - Options.Picking.RunningWindowLength),
+                                                                                                                      TempTableGood.RowCount - 1,
+                                                                                                                      1)).Save(PathBoxNetFilteredSubset);
+                                                                }
+                                                            }
+                                                            SuccessGood = true;
+                                                            Console.WriteLine($"Wrote {RowsGood.Count} rows to good particles star file");
+                                                            Console.WriteLine($"RowsAll contains {RowsAll.Count} lines and AllMovieParticleRows contains {AllMovieParticleRows.Count}");
+                                                        }
+                                                        catch { }
+                                                    }
+
+                                                    lock (TableBoxNetAllWriteLock)
+                                                        TableBoxNetConcurrent--;
+                                                });
+                                            }
                                     }
                                     else
                                     {
@@ -1887,8 +2293,18 @@ namespace Warp
 
                         lock (AllMovieParticleRows)
                         {
+                            int counter = 0;
                             foreach (var pair in AllMovieParticleRows)
                             {
+                                if (Options.Picking.WriteOpticGroups)
+                                {
+                                    string newGroup = sessionManager.GetOpticsGroup(pair.Key.Name);
+                                    foreach (List<string> Row in AllMovieParticleRows[pair.Key])
+                                    {
+                                        Row[TableBoxNetAll.GetColumnID("rlnOpticsGroup")] = newGroup;
+                                        counter++;
+                                    }
+                                }
                                 RowsAll.AddRange(pair.Value);
                                 if (!(pair.Key.UnselectFilter || (pair.Key.UnselectManual != null && pair.Key.UnselectManual.Value)))
                                     RowsGood.AddRange(pair.Value);
@@ -1906,7 +2322,13 @@ namespace Warp
                         {
                             try
                             {
-                                TempTableAll.Save(PathBoxNetAll + "_temp");
+                                if (Options.Picking.WriteOpticGroups)
+                                {
+                                    sessionManager.OpticsGroupTable.Save(PathBoxNetAll + "_temp", "optics", false);
+                                    TempTableAll.Save(PathBoxNetAll + "_temp", "particles", true);
+                                } else {
+                                    TempTableAll.Save(PathBoxNetAll + "_temp");
+                                }
                                 lock (TableBoxNetAllWriteLock)
                                 {
                                     if (File.Exists(PathBoxNetAll))
@@ -1926,7 +2348,12 @@ namespace Warp
                         {
                             try
                             {
-                                TempTableGood.Save(PathBoxNetFiltered + "_temp");
+                                if (Options.Picking.WriteOpticGroups) {
+                                    sessionManager.OpticsGroupTable.Save(PathBoxNetFiltered + "_temp", "optics", false);
+                                    TempTableGood.Save(PathBoxNetFiltered + "_temp", "particles", true);
+                                } else {
+                                    TempTableGood.Save(PathBoxNetFiltered + "_temp");
+                                }
                                 lock (TableBoxNetAllWriteLock)
                                 {
                                     if (File.Exists(PathBoxNetFiltered))
@@ -1952,6 +2379,7 @@ namespace Warp
                 ButtonStartProcessing.Content = "STOPPING...";
 
                 IsPreprocessing = false;
+                Options.IsProcessing = false;
                 if (PreprocessingTask != null)
                 {
                     await PreprocessingTask;
@@ -2086,10 +2514,34 @@ namespace Warp
 
             int[] ColorIDs = new int[Items.Length];
             int NProcessed = 0, NOutdated = 0, NUnprocessed = 0, NFilteredOut = 0, NUnselected = 0;
+            List<Movie> updatedOpticGroups = new List<Movie>();
             for (int i = 0; i < Items.Length; i++)
             {
                 ProcessingStatus Status = StatusBar.GetMovieProcessingStatus(Items[i], OptionsCTF, OptionsMovement, OptionsBoxNet, OptionsExport, Options);
                 int ID = 0;
+                
+                if (IsPreprocessing && Options.Picking.WriteOpticGroups)
+                {
+                    lock(HasOpticsGroup)
+                    {
+                        if (!HasOpticsGroup.Contains(Items[i]))
+                        {
+                            string newGroup = sessionManager.GetOpticsGroup(Items[i].Name);
+                            if (newGroup != "0")
+                            {
+                                updatedOpticGroups.Add(Items[i]);
+                            }
+                        }
+                    }
+                }
+
+                foreach (var ts in Options.TiltSeries.TiltSeriesList)
+                {
+                    if (!ts.IsInitialized) continue;
+                    if (ts.IsTomogramAvailable) continue;
+                    if (ts.IsNotProcessing) _ = ts.UpdateTiltStatus(Items[i], Status);
+                }
+
                 switch (Status)
                 {
                     case ProcessingStatus.Processed:
@@ -2114,6 +2566,23 @@ namespace Warp
                         break;
                 }
                 ColorIDs[i] = ID;
+            }
+            lock (HasOpticsGroup)
+            {
+                HasOpticsGroup.AddRange(updatedOpticGroups);
+            }
+
+            if (NOutdated > 0 && !IsPreprocessing && !Options.Classification.DoManualClassification)
+            {
+                NeedsRelaunchClass = true;
+            }
+            if (NOutdated == 0 && !IsPreprocessing && !Options.Classification.DoManualClassification)
+            {
+                NeedsRelaunchClass = false;
+            }
+            if (NOutdated == 0 && NeedsRelaunchClass && IsPreprocessing && !Options.Classification.DoManualClassification) {
+                RelaunchClass?.Invoke(null,null);
+                NeedsRelaunchClass = false;
             }
 
             Dispatcher.InvokeAsync(() =>
@@ -2231,8 +2700,8 @@ namespace Warp
                     {
                         ParticleValues[i] = Count;
                         CountSum += Count;
-
-                        if (!(Items[i].UnselectFilter || (Items[i].UnselectManual != null && Items[i].UnselectManual.Value)))
+                        ProcessingStatus Status = StatusBar.GetMovieProcessingStatus(Items[i], OptionsCTF, OptionsMovement, OptionsBoxNet, OptionsExport, Options);
+                        if (!(Items[i].UnselectFilter || (Items[i].UnselectManual != null && Items[i].UnselectManual.Value)) && Status == ProcessingStatus.Processed)
                             CountFilteredSum += Count;
                     }
                     else
@@ -2249,6 +2718,7 @@ namespace Warp
                     TextStatsParticlesOverall.Value = CountSum.ToString();
                     TextStatsParticlesFiltered.Value = CountFilteredSum.ToString();
                 });
+                sessionManager.NGoodParticles = CountFilteredSum;
             }
             else
             {
@@ -2269,6 +2739,7 @@ namespace Warp
 
                 Dispatcher.InvokeAsync(() => PlotStatsMaskPercentage.Points = new ObservableCollection<SingleAxisPoint>(MaskPercentagePlotValues));
             }
+
         }
 
         private void UpdateStatsAstigmatismPlot()
@@ -2396,6 +2867,8 @@ namespace Warp
             });
         }
 
+        List<Movie> FilteredOutMovies = new List<Movie>();
+
         private void UpdateFilterResult()
         {
             Movie[] Items = FileDiscoverer.GetImmutableFiles();
@@ -2408,38 +2881,80 @@ namespace Warp
                 AstigmatismStd = Options.AstigmatismStd;
             }
 
-            foreach (var item in Items)
+
+            lock (FilteredOutMovies)
             {
-                bool FilterStatus = true;
-
-                if (item.OptionsCTF != null)
+                FilteredOutMovies.Clear();
+                foreach (var item in Items)
                 {
-                    FilterStatus &= item.CTF.Defocus >= Options.Filter.DefocusMin && item.CTF.Defocus <= Options.Filter.DefocusMax;
-                    float AstigmatismDeviation = (new float2((float)Math.Cos((float)item.CTF.DefocusAngle * 2 * Helper.ToRad) * (float)item.CTF.DefocusDelta,
-                                                             (float)Math.Sin((float)item.CTF.DefocusAngle * 2 * Helper.ToRad) * (float)item.CTF.DefocusDelta) - AstigmatismMean).Length() / AstigmatismStd;
-                    FilterStatus &= AstigmatismDeviation <= (float)Options.Filter.AstigmatismMax;
+                    bool FilterStatus = true;
 
-                    FilterStatus &= item.CTFResolutionEstimate <= Options.Filter.ResolutionMax;
+                    if (item.OptionsCTF != null)
+                    {
+                        FilterStatus &= item.CTF.Defocus >= Options.Filter.DefocusMin && item.CTF.Defocus <= Options.Filter.DefocusMax;
+                        float AstigmatismDeviation = (new float2((float)Math.Cos((float)item.CTF.DefocusAngle * 2 * Helper.ToRad) * (float)item.CTF.DefocusDelta,
+                                                                 (float)Math.Sin((float)item.CTF.DefocusAngle * 2 * Helper.ToRad) * (float)item.CTF.DefocusDelta) - AstigmatismMean).Length() / AstigmatismStd;
+                        FilterStatus &= AstigmatismDeviation <= (float)Options.Filter.AstigmatismMax;
 
-                    if (Options.CTF.DoPhase)
-                        FilterStatus &= item.CTF.PhaseShift >= Options.Filter.PhaseMin && item.CTF.PhaseShift <= Options.Filter.PhaseMax;
+                        FilterStatus &= item.CTFResolutionEstimate <= Options.Filter.ResolutionMax;
+
+                        if (Options.CTF.DoPhase)
+                            FilterStatus &= item.CTF.PhaseShift >= Options.Filter.PhaseMin && item.CTF.PhaseShift <= Options.Filter.PhaseMax;
+                    }
+
+                    if (item.OptionsMovement != null)
+                    {
+                        FilterStatus &= item.MeanFrameMovement <= Options.Filter.MotionMax;
+                    }
+
+                    if (item.HasAnyParticleSuffixes())
+                    {
+                        int Count = item.GetParticleCount(Options.Filter.ParticlesSuffix);
+                        if (Count >= 0)
+                            FilterStatus &= Count >= Options.Filter.ParticlesMin;
+                    }
+
+                    FilterStatus &= item.MaskPercentage <= Options.Filter.MaskPercentage;
+
+                    item.UnselectFilter = !FilterStatus;
+
+                    if (!FilterStatus) FilteredOutMovies.Add(item);
                 }
 
-                if (item.OptionsMovement != null)
+                List<string> WriteLines = new List<string>();
+                foreach (var item in FilteredOutMovies)
                 {
-                    FilterStatus &= item.MeanFrameMovement <= Options.Filter.MotionMax;
+                    WriteLines.Add(item.Path);
+                    WriteLines.Add(item.XMLPath);
+                    WriteLines.Add(item.AveragePath);
+                    WriteLines.Add(item.DeconvolvedPath);
+                    WriteLines.Add(item.ThumbnailsPath);
+                    WriteLines.Add(Path.Combine(item.MatchingDir, item.RootName + ".star"));
+                    WriteLines.Add(item.PowerSpectrumPath);
+                    WriteLines.Add(item.MaskPath);
+                    string BoxNetSuffix = Helper.PathToNameWithExtension(Options.Picking.ModelPath);
+                    WriteLines.Add(Path.Combine(item.DirectoryName, "particles", item.RootName + "_" + BoxNetSuffix + ".mrcs"));
+                    int index = Helper.PathToName(item.Name).IndexOf("_fractions");
+                    if (index >= 0)
+                    {
+                        string microscopeXMLfile = item.DirectoryName + "microscopeXMLfiles" + @"\" + Helper.PathToName(item.Name).Substring(0, index) + ".xml";
+                        WriteLines.Add(microscopeXMLfile);
+                    }
+                }
+                for (int i = 0; i < 5; i++)
+                {
+                    try
+                    {
+                        File.WriteAllLines(Path.Combine(Options.Import.Folder, "filteredoutitems.txt"), WriteLines);
+                    }
+                    catch
+                    {
+                        Thread.Sleep(100);
+                        continue;
+                    }
+                    break;
                 }
 
-                if (item.HasAnyParticleSuffixes())
-                {
-                    int Count = item.GetParticleCount(Options.Filter.ParticlesSuffix);
-                    if (Count >= 0)
-                        FilterStatus &= Count >= Options.Filter.ParticlesMin;
-                }
-
-                FilterStatus &= item.MaskPercentage <= Options.Filter.MaskPercentage;
-
-                item.UnselectFilter = !FilterStatus;
             }
 
             // Calculate average CTF
@@ -3183,6 +3698,7 @@ namespace Warp
 
         public void AdjustInput()
         {
+            Console.Write($"FileDiscoverer path set to {Options.Import.Folder}");
             FileDiscoverer.ChangePath(Options.Import.Folder, Options.Import.Extension);
         }
 
@@ -3418,6 +3934,24 @@ namespace Warp
             return Devices;
         }
 
+        
+        public void UpdateSshGpus()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                Options.SshSettings.ListGPUsSsh();
+                PanelSshGPUStats.Children.Clear();
+                foreach (var checkBox in Options.SshSettings.CheckboxesSshGPUS)
+                    PanelSshGPUStats.Children.Add(checkBox);
+
+                for (int i = 0; i < Options.SshSettings.CheckboxesSshGPUS.Length; i++)
+                {
+                    Options.SshSettings.CheckboxesSshGPUS[i].Content = $"GPU {i}";
+                }
+            });
+
+        }
+
         #endregion
 
         #region Experimental
@@ -3649,150 +4183,150 @@ namespace Warp
             //                            /*for (int refinement = 0; refinement < 20; refinement++)
             //                            {*/
 
-            //                            //OriginalStack.FreeDevice();
-            //                            ((TiltSeries)movie).PerformOptimizationStep(TableIn,
-            //                                                                        OriginalStack,
-            //                                                                        Options.ExportParticleSize,
-            //                                                                        new int3(4096, 4096, 1200),
-            //                                                                        DeviceReferences[CurrentDevice.ID],
-            //                                                                        18f,
-            //                                                                        300f,
-            //                                                                        30,
-            //                                                                        true,
-            //                                                                        true,
-            //                                                                        false,
-            //                                                                        true,
-            //                                                                        DeviceReconstructions[0],
-            //                                                                        DeviceCTFReconstructions[0]);
+                                        //                            //OriginalStack.FreeDevice();
+                                        //                            ((TiltSeries)movie).PerformOptimizationStep(TableIn,
+                                        //                                                                        OriginalStack,
+                                        //                                                                        Options.ExportParticleSize,
+                                        //                                                                        new int3(4096, 4096, 1200),
+                                        //                                                                        DeviceReferences[CurrentDevice.ID],
+                                        //                                                                        18f,
+                                        //                                                                        300f,
+                                        //                                                                        30,
+                                        //                                                                        true,
+                                        //                                                                        true,
+                                        //                                                                        false,
+                                        //                                                                        true,
+                                        //                                                                        DeviceReconstructions[0],
+                                        //                                                                        DeviceCTFReconstructions[0]);
 
-            //                            //((TiltSeries)movie).RealspaceRefineGlobal(TableIn, OriginalStack, Options.ExportParticleSize, new int3(3838, 3710, 1200), References, 30, 2, "D4", Reconstructions);
-
-
-            //                            //Image Simulated = ((TiltSeries)movie).SimulateTiltSeries(TableIn, OriginalStack.Dims, Options.ExportParticleSize, new int3(3712, 3712, 1200), References, 15);
-            //                            //Simulated.WriteMRC("d_simulatedseries.mrc");
-
-            //                            //((TiltSeries)movie).AlignTiltMovies(TableIn, OriginalStack.Dims, Options.ExportParticleSize, new int3(3712, 3712, 1200), References, 100);
+                                        //                            //((TiltSeries)movie).RealspaceRefineGlobal(TableIn, OriginalStack, Options.ExportParticleSize, new int3(3838, 3710, 1200), References, 30, 2, "D4", Reconstructions);
 
 
-            //                            /*TableIn.Save(SaveDialog.FileName + $".it{refinement:D2}.star");
-            //                            }*/
+                                        //                            //Image Simulated = ((TiltSeries)movie).SimulateTiltSeries(TableIn, OriginalStack.Dims, Options.ExportParticleSize, new int3(3712, 3712, 1200), References, 15);
+                                        //                            //Simulated.WriteMRC("d_simulatedseries.mrc");
 
-            //                            //((TiltSeries)movie).ExportSubtomos(TableIn, OriginalStack, 192, new int3(3712, 3712, 1400), 3);
+                                        //                            //((TiltSeries)movie).AlignTiltMovies(TableIn, OriginalStack.Dims, Options.ExportParticleSize, new int3(3712, 3712, 1200), References, 100);
 
-            //                            //OriginalStack.FreeDevice();
-            //                            //Image Reference = StageDataLoad.LoadMap("F:\\badaben\\ref_from_refinement.mrc", new int2(1, 1), 0, typeof(float));
-            //                            //((TiltSeries)movie).Correlate(OriginalStack, Reference, 128, 3.42f * 4 * 2, 400, new int3(3712, 3712, 1400), 5000, 2, "C1");
-            //                            //Reference.Dispose();
 
-            //                            //GPU.SetDevice(0);
-            //                            //((TiltSeries)movie).MakePerTomogramReconstructions(TableIn, OriginalStack, Options.ExportParticleSize, new int3(3712, 3712, 1400));
-            //                            //((TiltSeries)movie).AddToPerAngleReconstructions(TableIn, OriginalStack, Options.ExportParticleSize, new int3(3710, 3710, 1400), PerAngleReconstructions, PerAngleWeightReconstructions);
-            //                        }
+                                        //                            /*TableIn.Save(SaveDialog.FileName + $".it{refinement:D2}.star");
+                                        //                            }*/
 
-            //                        OriginalStack?.Dispose();
-            //                        //Debug.WriteLine(movie.Path);
-            //                        //TableIn.Save(SaveDialog.FileName);
+                                        //                            //((TiltSeries)movie).ExportSubtomos(TableIn, OriginalStack, 192, new int3(3712, 3712, 1400), 3);
 
-            //                        lock (Devices)
-            //                            Devices.Enqueue(CurrentDevice);
+                                        //                            //OriginalStack.FreeDevice();
+                                        //                            //Image Reference = StageDataLoad.LoadMap("F:\\badaben\\ref_from_refinement.mrc", new int2(1, 1), 0, typeof(float));
+                                        //                            //((TiltSeries)movie).Correlate(OriginalStack, Reference, 128, 3.42f * 4 * 2, 400, new int3(3712, 3712, 1400), 5000, 2, "C1");
+                                        //                            //Reference.Dispose();
 
-            //                        Debug.WriteLine("Done: " + movie.RootName);
-            //                    });
-            //                    DeviceThread.Name = movie.RootName + " thread";
-            //                    DeviceThread.Start();
-            //                }
+                                        //                            //GPU.SetDevice(0);
+                                        //                            //((TiltSeries)movie).MakePerTomogramReconstructions(TableIn, OriginalStack, Options.ExportParticleSize, new int3(3712, 3712, 1400));
+                                        //                            //((TiltSeries)movie).AddToPerAngleReconstructions(TableIn, OriginalStack, Options.ExportParticleSize, new int3(3710, 3710, 1400), PerAngleReconstructions, PerAngleWeightReconstructions);
+                                        //                        }
 
-            //            while (Devices.Count != NTokens)
-            //                Thread.Sleep(20);
+                                        //                        OriginalStack?.Dispose();
+                                        //                        //Debug.WriteLine(movie.Path);
+                                        //                        //TableIn.Save(SaveDialog.FileName);
 
-            //            for (int d = 0; d < UsedDevices; d++)
-            //            {
-            //                ImageGain[d]?.Dispose();
-            //            }
+                                        //                        lock (Devices)
+                                        //                            Devices.Enqueue(CurrentDevice);
 
-            //            for (int d = 0; d < DeviceReferences.Length; d++)
-            //            {
-            //                GPU.SetDevice(d);
-            //                foreach (var reconstruction in DeviceReconstructions[d])
-            //                {
-            //                    if (d == 0)
-            //                    {
-            //                        Image ReconstructedMap = reconstruction.Value.Reconstruct(false);
-            //                        //ReconstructedMap.WriteMRC($"F:\\chloroplastribo\\vlion12\\warped_{reconstruction.Key}_nodeconv.mrc");
+                                        //                        Debug.WriteLine("Done: " + movie.RootName);
+                                        //                    });
+                                        //                    DeviceThread.Name = movie.RootName + " thread";
+                                        //                    DeviceThread.Start();
+                                        //                }
 
-            //                        Image ReconstructedCTF = DeviceCTFReconstructions[d][reconstruction.Key].Reconstruct(true);
+                                        //            while (Devices.Count != NTokens)
+                                        //                Thread.Sleep(20);
 
-            //                        Image ReconstructedMapFT = ReconstructedMap.AsFFT(true);
-            //                        ReconstructedMap.Dispose();
+                                        //            for (int d = 0; d < UsedDevices; d++)
+                                        //            {
+                                        //                ImageGain[d]?.Dispose();
+                                        //            }
 
-            //                        int Dim = ReconstructedMap.Dims.Y;
-            //                        int DimFT = Dim / 2 + 1;
-            //                        int R2 = Dim / 2 - 2;
-            //                        R2 *= R2;
-            //                        foreach (var slice in ReconstructedCTF.GetHost(Intent.ReadWrite))
-            //                        {
-            //                            for (int y = 0; y < Dim; y++)
-            //                            {
-            //                                int yy = y < Dim / 2 + 1 ? y : y - Dim;
-            //                                yy *= yy;
+                                        //            for (int d = 0; d < DeviceReferences.Length; d++)
+                                        //            {
+                                        //                GPU.SetDevice(d);
+                                        //                foreach (var reconstruction in DeviceReconstructions[d])
+                                        //                {
+                                        //                    if (d == 0)
+                                        //                    {
+                                        //                        Image ReconstructedMap = reconstruction.Value.Reconstruct(false);
+                                        //                        //ReconstructedMap.WriteMRC($"F:\\chloroplastribo\\vlion12\\warped_{reconstruction.Key}_nodeconv.mrc");
 
-            //                                for (int x = 0; x < DimFT; x++)
-            //                                {
-            //                                    int xx = x * x;
+                                        //                        Image ReconstructedCTF = DeviceCTFReconstructions[d][reconstruction.Key].Reconstruct(true);
 
-            //                                    slice[y * DimFT + x] = xx + yy < R2 ? Math.Max(1e-2f, slice[y * DimFT + x]) : 1f;
-            //                                }
-            //                            }
-            //                        }
+                                        //                        Image ReconstructedMapFT = ReconstructedMap.AsFFT(true);
+                                        //                        ReconstructedMap.Dispose();
 
-            //                        ReconstructedMapFT.Divide(ReconstructedCTF);
-            //                        ReconstructedMap = ReconstructedMapFT.AsIFFT(true);
-            //                        ReconstructedMapFT.Dispose();
+                                        //                        int Dim = ReconstructedMap.Dims.Y;
+                                        //                        int DimFT = Dim / 2 + 1;
+                                        //                        int R2 = Dim / 2 - 2;
+                                        //                        R2 *= R2;
+                                        //                        foreach (var slice in ReconstructedCTF.GetHost(Intent.ReadWrite))
+                                        //                        {
+                                        //                            for (int y = 0; y < Dim; y++)
+                                        //                            {
+                                        //                                int yy = y < Dim / 2 + 1 ? y : y - Dim;
+                                        //                                yy *= yy;
 
-            //                        //GPU.SphereMask(ReconstructedMap.GetDevice(Intent.Read),
-            //                        //               ReconstructedMap.GetDevice(Intent.Write),
-            //                        //               ReconstructedMap.Dims,
-            //                        //               (float)(ReconstructedMap.Dims.X / 2 - 8),
-            //                        //               8,
-            //                        //               1);
+                                        //                                for (int x = 0; x < DimFT; x++)
+                                        //                                {
+                                        //                                    int xx = x * x;
 
-            //                        ReconstructedMap.WriteMRC($"G:\\lucas_warp\\warped_{reconstruction.Key}.mrc");
-            //                        ReconstructedMap.Dispose();
-            //                    }
+                                        //                                    slice[y * DimFT + x] = xx + yy < R2 ? Math.Max(1e-2f, slice[y * DimFT + x]) : 1f;
+                                        //                                }
+                                        //                            }
+                                        //                        }
 
-            //                    reconstruction.Value.Dispose();
-            //                    DeviceReferences[d][reconstruction.Key].Dispose();
-            //                    DeviceCTFReconstructions[d][reconstruction.Key].Dispose();
-            //                }
-            //            }
+                                        //                        ReconstructedMapFT.Divide(ReconstructedCTF);
+                                        //                        ReconstructedMap = ReconstructedMapFT.AsIFFT(true);
+                                        //                        ReconstructedMapFT.Dispose();
 
-            //            //string WeightOptimizationDir = ((TiltSeries)Options.Movies[0]).WeightOptimizationDir;
-            //            //foreach (var subset in PerAngleReconstructions)
-            //            //{
-            //            //    for (int t = 0; t < NTilts; t++)
-            //            //    {
-            //            //        Image Reconstruction = PerAngleReconstructions[subset.Key][t].Reconstruct(false);
-            //            //        PerAngleReconstructions[subset.Key][t].Dispose();
-            //            //        Reconstruction.WriteMRC(WeightOptimizationDir + $"subset{subset.Key}_tilt{t.ToString("D3")}.mrc");
-            //            //        Reconstruction.Dispose();
+                                        //                        //GPU.SphereMask(ReconstructedMap.GetDevice(Intent.Read),
+                                        //                        //               ReconstructedMap.GetDevice(Intent.Write),
+                                        //                        //               ReconstructedMap.Dims,
+                                        //                        //               (float)(ReconstructedMap.Dims.X / 2 - 8),
+                                        //                        //               8,
+                                        //                        //               1);
 
-            //            //        foreach (var slice in PerAngleWeightReconstructions[subset.Key][t].Weights.GetHost(Intent.ReadWrite))
-            //            //            for (int i = 0; i < slice.Length; i++)
-            //            //                slice[i] = Math.Min(1, slice[i]);
-            //            //        Image WeightReconstruction = PerAngleWeightReconstructions[subset.Key][t].Reconstruct(true);
-            //            //        PerAngleWeightReconstructions[subset.Key][t].Dispose();
-            //            //        WeightReconstruction.WriteMRC(WeightOptimizationDir + $"subset{subset.Key}_tilt{t.ToString("D3")}.weight.mrc");
-            //            //        WeightReconstruction.Dispose();
-            //            //    }
-            //            //}
+                                        //                        ReconstructedMap.WriteMRC($"G:\\lucas_warp\\warped_{reconstruction.Key}.mrc");
+                                        //                        ReconstructedMap.Dispose();
+                                        //                    }
 
-            //            TableIn.Save(SaveDialog.FileName);
-            //            //TableOut.Save(SaveDialog.FileName);
-            //        });
-            //        ProcessThread.Start();
-            //    }
-            //}
-        }
+                                        //                    reconstruction.Value.Dispose();
+                                        //                    DeviceReferences[d][reconstruction.Key].Dispose();
+                                        //                    DeviceCTFReconstructions[d][reconstruction.Key].Dispose();
+                                        //                }
+                                        //            }
+
+                                        //            //string WeightOptimizationDir = ((TiltSeries)Options.Movies[0]).WeightOptimizationDir;
+                                        //            //foreach (var subset in PerAngleReconstructions)
+                                        //            //{
+                                        //            //    for (int t = 0; t < NTilts; t++)
+                                        //            //    {
+                                        //            //        Image Reconstruction = PerAngleReconstructions[subset.Key][t].Reconstruct(false);
+                                        //            //        PerAngleReconstructions[subset.Key][t].Dispose();
+                                        //            //        Reconstruction.WriteMRC(WeightOptimizationDir + $"subset{subset.Key}_tilt{t.ToString("D3")}.mrc");
+                                        //            //        Reconstruction.Dispose();
+
+                                        //            //        foreach (var slice in PerAngleWeightReconstructions[subset.Key][t].Weights.GetHost(Intent.ReadWrite))
+                                        //            //            for (int i = 0; i < slice.Length; i++)
+                                        //            //                slice[i] = Math.Min(1, slice[i]);
+                                        //            //        Image WeightReconstruction = PerAngleWeightReconstructions[subset.Key][t].Reconstruct(true);
+                                        //            //        PerAngleWeightReconstructions[subset.Key][t].Dispose();
+                                        //            //        WeightReconstruction.WriteMRC(WeightOptimizationDir + $"subset{subset.Key}_tilt{t.ToString("D3")}.weight.mrc");
+                                        //            //        WeightReconstruction.Dispose();
+                                        //            //    }
+                                        //            //}
+
+                                        //            TableIn.Save(SaveDialog.FileName);
+                                        //            //TableOut.Save(SaveDialog.FileName);
+                                        //        });
+                                        //        ProcessThread.Start();
+                                        //    }
+                                        //}
+                                    }
 
         private void ButtonPolishParticles_OnClick(object sender, RoutedEventArgs e)
         {
@@ -4446,6 +4980,402 @@ namespace Warp
             //}
         }
 
+        private void ButtonSshKey_OnClick(object sender, RoutedEventArgs e)
+        {
+            System.Windows.Forms.OpenFileDialog Dialog = new System.Windows.Forms.OpenFileDialog
+            {
+                Filter = "Ssh key|*",
+                Multiselect = false
+            };
+            System.Windows.Forms.DialogResult Result = Dialog.ShowDialog();
+
+            if (Result.ToString() == "OK")
+            {
+                Options.SshSettings.SshKey = Dialog.FileName;
+            }
+        }
+
+        private void ButtonClearTiltSeries_OnClick(object sender, RoutedEventArgs e)
+        {
+
+            CustomDialog Dialog = new CustomDialog();
+            Dialog.HorizontalContentAlignment = HorizontalAlignment.Center;
+
+            UserConfirm DialogContent = new UserConfirm("Clear tilt series?", Options);
+            DialogContent.Close += async () =>
+            {
+                if (DialogContent.Confirm)
+                {
+                    FrameworkElement fe = sender as FrameworkElement;
+                    var ts = ((TiltSeriesViewModel)fe.DataContext);
+                    lock (Options.TiltSeries.TiltSeriesProcessQueue)
+                    {
+                        Options.TiltSeries.TiltSeriesProcessQueue.Remove(ts);
+                    }
+                    ts.IsQueued = false;
+                    ts.CancellationTokenSource.Cancel();
+                    ts.IsNotProcessing = true;
+                    var failedToDelete = ts.ClearSeries();
+                    if (failedToDelete.Count > 0)
+                    {
+                        string messageBoxText = String.Join("\n", failedToDelete.ToArray());
+                        string caption = "Failed to delete some files";
+                        await this.ShowMessageAsync(caption, messageBoxText);
+
+                    }
+                }
+                await this.HideMetroDialogAsync(Dialog);
+            };
+
+            Dialog.Content = DialogContent;
+            this.ShowMetroDialogAsync(Dialog);
+        }
+
+        private void ButtonDuplicateTiltSeries_OnClick(object sender, RoutedEventArgs e)
+        {
+
+            CustomDialog Dialog = new CustomDialog();
+            Dialog.HorizontalContentAlignment = HorizontalAlignment.Center;
+
+            FrameworkElement fe = sender as FrameworkElement;
+            var ts = ((TiltSeriesViewModel)fe.DataContext);
+            var path = Path.GetDirectoryName(ts.MdocFile);
+            int counter = 1;
+            string baseName;
+            try
+            {
+                baseName = ts.Name.Substring(0, ts.Name.IndexOf("-Copy"));
+            } catch (Exception ex)
+            {
+                baseName = ts.Name;
+            }
+            var newName = baseName + String.Format("-Copy-{0}.mdoc", counter.ToString());
+            while (File.Exists(Path.Combine(path, newName)))
+            {
+                counter++;
+                newName = baseName + String.Format("-Copy-{0}.mdoc", counter.ToString());
+            }
+            UserCreateCopy DialogContent = new UserCreateCopy("Duplicate tilt series?", path, Options);
+            DialogContent.NewName = newName;
+            DialogContent.Close += () =>
+            {
+                if (DialogContent.Confirm)
+                {
+
+                    try {
+
+                        File.Copy(ts.MdocFile,Path.Combine(path,DialogContent.NewName));
+                    } catch (Exception ex)
+                    {
+                        LogToFile(ex.Message);
+                    }
+                }
+                this.HideMetroDialogAsync(Dialog);
+            };
+
+            Dialog.Content = DialogContent;
+            this.ShowMetroDialogAsync(Dialog);
+        }
+
+        private void ButtonOpenProjections_OnClick(object sender, RoutedEventArgs e)
+        {
+            FrameworkElement fe = sender as FrameworkElement;
+            TiltSeriesViewModel ts;
+            try
+            {
+                ts = ((TiltSeriesViewModel)fe.DataContext);
+            } catch (InvalidCastException ex)
+            {
+                return;
+            }
+            ProcessingFiles files = TiltSeriesProcessor.ProcessingFiles(ts.MdocFile, "");
+            System.Diagnostics.Process.Start(files.OutPng);
+            System.Diagnostics.Process.Start(files.OutPngXZ);
+        }
+
+        private void ButtonCopyGlobalSettings_OnClick(object sender, RoutedEventArgs e)
+        {
+            FrameworkElement fe = sender as FrameworkElement;
+            TiltSeriesViewModel ts;
+            try
+            {
+                ts = ((TiltSeriesViewModel)fe.DataContext);
+            }
+            catch (InvalidCastException ex)
+            {
+                return;
+            }
+            LogToFile($"Copying settings to {ts.Name}");
+            ts.CopyGlobalSettings();
+        }
+
+        private void ButtonRenameTiltSeries_OnClick(object sender, RoutedEventArgs e)
+        {
+            CustomDialog Dialog = new CustomDialog();
+            Dialog.HorizontalContentAlignment = HorizontalAlignment.Center;
+
+            FrameworkElement fe = sender as FrameworkElement;
+            var ts = ((TiltSeriesViewModel)fe.DataContext);
+            var path = Path.GetDirectoryName(ts.MdocFile);
+
+            UserChangeDisplayName DialogContent = new UserChangeDisplayName("Rename tilt series?", path, Options);
+            DialogContent.NewName = ts.DisplayName;
+            DialogContent.Close += () =>
+            {
+                if (DialogContent.Confirm)
+                {
+                    ts.DisplayName = DialogContent.NewName;
+                }
+                this.HideMetroDialogAsync(Dialog);
+            };
+
+            Dialog.Content = DialogContent;
+            this.ShowMetroDialogAsync(Dialog);
+        }
+
+        private void ButtonDeleteTiltSeries_OnClick(object sender, RoutedEventArgs e)
+        {
+            CustomDialog Dialog = new CustomDialog();
+            Dialog.HorizontalContentAlignment = HorizontalAlignment.Center;
+
+            FrameworkElement fe = sender as FrameworkElement;
+            var ts = ((TiltSeriesViewModel)fe.DataContext);
+            var path = Path.GetDirectoryName(ts.MdocFile);
+
+            UserConfirm DialogContent = new UserConfirm("Delete tilt series?", Options);
+            DialogContent.Close += () =>
+            {
+                if (DialogContent.Confirm)
+                {
+                    File.Delete(ts.MdocFile);
+                    Dispatcher.Invoke(() => {
+                        ts.CancellationTokenSource.Cancel();
+                    lock (Options.TiltSeries.TiltSeriesProcessQueue)
+                    {
+                        Options.TiltSeries.TiltSeriesProcessQueue.Remove(ts);
+                    }                        Options.TiltSeries.TiltSeriesList.Remove(ts);
+                        });
+                }
+                this.HideMetroDialogAsync(Dialog);
+            };
+
+            Dialog.Content = DialogContent;
+            this.ShowMetroDialogAsync(Dialog);
+        }
+
+        private void ButtonQueueTiltSeries_OnClick(object sender, RoutedEventArgs e)
+        {
+            FrameworkElement fe = sender as FrameworkElement;
+            var ts = ((TiltSeriesViewModel)fe.DataContext);
+            if (ts.IsQueued)
+            {
+                if (Options.TiltSeries.TiltSeriesProcessQueue.Contains(ts)) {
+                    Dispatcher.Invoke(() =>
+                    {
+                        lock (Options.TiltSeries.TiltSeriesProcessQueue)
+                        {
+                            Options.TiltSeries.TiltSeriesProcessQueue.Remove(ts);
+                        }
+                    });
+                }
+                ts.IsQueued = false;
+                return;
+            }
+            if (!ts.IsQueued)
+            {
+                if (!Options.TiltSeries.TiltSeriesProcessQueue.Contains(ts)) {
+                    Dispatcher.Invoke(() =>
+                    {
+                        lock (Options.TiltSeries.TiltSeriesProcessQueue)
+                        {
+                            Options.TiltSeries.TiltSeriesProcessQueue.Add(ts);
+                        }
+                    });
+                }
+                ts.IsQueued = true;
+            }
+        }
+
+        private void ButtonClassificationSettings_OnClick(object sender, RoutedEventArgs e)
+        {
+            CustomDialog Dialog = new CustomDialog();
+            Dialog.HorizontalContentAlignment = HorizontalAlignment.Center;
+
+            UserClassificationSettings DialogContent = new UserClassificationSettings(Options);
+            DialogContent.Close += () =>
+            {
+                this.HideMetroDialogAsync(Dialog);
+            };
+
+            Dialog.Content = DialogContent;
+            this.ShowMetroDialogAsync(Dialog);
+        }
+
+        private void ButtonDoClassificationNow_OnClick(object sender, RoutedEventArgs e)
+        {
+            ButtonDoClassificationNow.IsEnabled = false;
+            ButtonDoClassificationNowText.Text = "Running";
+            RelaunchClass?.Invoke(null, null);
+        }
+
+        private void ButtonBrowseLinux_OnClick(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Warp.Controls.Confirm.SftExplorer(Options, Options.SshSettings.Server, Options.SshSettings.Port, Options.SshSettings.Username, Options.SshSettings.SshKeyObject);
+
+            // Display the dialog box and read the response
+            bool? result = dialog.ShowDialog();
+
+            if (result == true)
+            {
+                // User accepted the dialog box
+                Options.SshSettings.LinuxPath = dialog.SelectedFile;
+            }
+        }
+
+        private void ButtonCopyToAll_OnClick(object sender, RoutedEventArgs e)
+        {
+            foreach (var ts in Options.TiltSeries.TiltSeriesList)
+            {
+                LogToFile($"Copying settings to {ts.Name}");
+                ts.CopyGlobalSettings();
+            }
+        }
+
+        private void ButtonClearAll_OnClick(object sender, RoutedEventArgs e)
+        {
+            CustomDialog Dialog = new CustomDialog();
+            Dialog.HorizontalContentAlignment = HorizontalAlignment.Center;
+
+            UserConfirm DialogContent = new UserConfirm("Clear all tilt series?", Options);
+            DialogContent.Close += () =>
+            {
+                if (DialogContent.Confirm)
+                {
+                    foreach (var ts in Options.TiltSeries.TiltSeriesList)
+                    {
+                        ts.ClearSeries();
+                        DialogContent.Info = $"Clearing {ts.DisplayName}";
+                    }
+                }
+                this.HideMetroDialogAsync(Dialog);
+            };
+
+            Dialog.Content = DialogContent;
+            this.ShowMetroDialogAsync(Dialog);
+
+        }
+
+        private void ButtonDeleteFilteredOutItems_OnClick(object sender, RoutedEventArgs e)
+        {
+            CustomDialog Dialog = new CustomDialog();
+            Dialog.HorizontalContentAlignment = HorizontalAlignment.Center;
+
+            UserConfirm DialogContent = new UserConfirm("Delete all filtered out data? THIS ACTION IS IRREVERSIBLE!", Options);
+
+            UpdateFilterResult();
+
+            DialogContent.Info = $"Found {FilteredOutMovies.Count} items to delete";
+
+            DialogContent.Close += () =>
+            {
+                if (DialogContent.Confirm)
+                {
+
+                    string path = Options.Import.Folder;
+
+                    Directory.CreateDirectory(Path.Combine(path, "Trash"));
+                    lock (FilteredOutMovies)
+                    {
+                        foreach (var item in FilteredOutMovies)
+                        {
+                            Dispatcher.Invoke(() => DialogContent.Info = $"Deleting {item.Name}");
+                            try
+                            {
+                                File.Move(item.Path, Path.Combine(path, "Trash", item.Name));
+                            }
+                            catch { };
+                            File.Delete(item.XMLPath);
+                            if (File.Exists(item.AveragePath)) File.Delete(item.AveragePath);
+                            if (File.Exists(item.DeconvolvedPath)) File.Delete(item.DeconvolvedPath);
+                            if (File.Exists(item.ThumbnailsPath)) File.Delete(item.ThumbnailsPath);
+                            if (File.Exists(Path.Combine(item.MatchingDir, item.RootName + ".star"))) File.Delete(Path.Combine(item.MatchingDir, item.RootName + ".star"));
+                            if (File.Exists(item.PowerSpectrumPath)) File.Delete(item.PowerSpectrumPath);
+                            if (File.Exists(item.MaskPath)) File.Delete(item.MaskPath);
+                            string BoxNetSuffix = Helper.PathToNameWithExtension(Options.Picking.ModelPath);
+                            string particles = Path.Combine(item.DirectoryName, "particles", item.RootName + "_" + BoxNetSuffix + ".mrcs");
+                            if (File.Exists(particles)) File.Delete(particles);
+                            int index = Helper.PathToName(item.Name).IndexOf("_fractions");
+                            string microscopeXMLfile = item.DirectoryName + "microscopeXMLfiles" + @"\" + Helper.PathToName(item.Name).Substring(0, index) + ".xml";
+                            try
+                            {
+                                File.Move(microscopeXMLfile, Path.Combine(path, "Trash", Helper.PathToName(item.Name).Substring(0, index) + ".xml"));
+                            }
+                            catch { }
+                        }
+                    }
+                    AdjustInput();
+                }
+                this.HideMetroDialogAsync(Dialog);
+            };
+
+            Dialog.Content = DialogContent;
+            this.ShowMetroDialogAsync(Dialog);
+        }
+
+        public void LogToFile(string s)
+        {
+            Dispatcher.InvokeAsync(async () => {
+                try
+                {
+                    using (StreamWriter outputFile = new StreamWriter(LogFile, true))
+                    {
+                        await outputFile.WriteLineAsync(s);
+                    }
+                }
+                catch { Console.WriteLine(s); };
+            });
+        }
+
+        private void ButtonTopazDenoiseAll_OnClick(object sender, RoutedEventArgs e)
+        {
+            CustomDialog Dialog = new CustomDialog();
+            Dialog.HorizontalContentAlignment = HorizontalAlignment.Center;
+
+            var DialogContent = new RunTopazControl(Options.Import.Folder, Options.SshSettings, Options.AretomoSettings, Options.TiltSeries);
+
+            DialogContent.Close += () => {
+                this.HideMetroDialogAsync(Dialog);
+            };
+
+            Dialog.Content = DialogContent;
+            this.ShowMetroDialogAsync(Dialog);
+        }
+
+        private void ButtonMicroscopePCPath_OnClick(object sender, RoutedEventArgs e)
+        {
+            System.Windows.Forms.FolderBrowserDialog Dialog = new System.Windows.Forms.FolderBrowserDialog
+            {
+                SelectedPath = Options.Import.MicroscopePCFolder
+            };
+            System.Windows.Forms.DialogResult Result = Dialog.ShowDialog();
+
+            if (Result.ToString() == "OK")
+            {
+                if (!IOHelper.CheckFolderPermission(Dialog.SelectedPath))
+                {
+                    MessageBox.Show("Don't have permission to access the selected folder.");
+                    return;
+                }
+
+                if (Dialog.SelectedPath[Dialog.SelectedPath.Length - 1] != '\\')
+                    Dialog.SelectedPath += '\\';
+
+                OptionsAutoSave = false;
+                Options.Import.MicroscopePCFolder = Dialog.SelectedPath;
+                OptionsAutoSave = true;
+            }
+        }
+
         private void CreateRandomSubsetReconstructions(Star tableIn, int size, int nRec, int particlesPerRec)
         {
             List<string> ParticleNames = new List<string>();
@@ -4564,6 +5494,99 @@ namespace Warp
             return MainWindow.Options.BinnedPixelSizeMean * 2 / (decimal)value;
         }
     }
+
+    public class JobStatusConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            jobStatus status;
+            try
+            {
+                status = (jobStatus)value;
+            }
+            catch (InvalidCastException)
+            {
+                return ("Running");
+            }
+
+            if (status == jobStatus.Started)
+            {
+                return ("Running");
+            }
+            else
+            {
+                return ("NotRunning");
+            }
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            throw new InvalidOperationException("jobStatusConverter can only be used OneWay.");
+        }
+    }
+
+    public class IsActiveConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            bool isActive;
+            try
+            {
+                isActive = (bool)value;
+            }
+            catch (InvalidCastException)
+            {
+                return ("Hidden");
+            }
+
+            if (isActive == true)
+            {
+                return ("Visible");
+            }
+            else
+            {
+                return ("Hidden");
+            }
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            throw new InvalidOperationException("jobStatusConverter can only be used OneWay.");
+        }
+
+    }
+
+    public class IsNotActiveConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            bool isActive;
+            try
+            {
+                isActive = (bool)value;
+            }
+            catch (InvalidCastException)
+            {
+                return ("Visible");
+            }
+
+            if (isActive == false)
+            {
+                return ("Visible");
+            }
+            else
+            {
+                return ("Hidden");
+            }
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            throw new InvalidOperationException("jobStatusConverter can only be used OneWay.");
+        }
+
+    }
+
 
     public class ActionCommand : ICommand
     {

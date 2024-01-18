@@ -3454,6 +3454,7 @@ namespace Warp
                         Bfactor = GridDoseBfacs.Values.Length == 1 ? -(decimal)((float)options.DosePerAngstromFrame * (z + FirstFrame + 0.5f) * 4) : (decimal)GridDoseBfacs.Values[z + FirstFrame],
                         Scale = GridDoseWeights.Values.Length == 1 ? 1 : (decimal)GridDoseWeights.Values[z + FirstFrame]
                     };
+
                     GPU.CreateCTF(Weights.GetDevice(Intent.Write),
                                   CTFCoords.GetDevice(Intent.Read),
                                   IntPtr.Zero,
@@ -3588,21 +3589,42 @@ namespace Warp
 
             if (options.DoAverage)
             {
-                Image Average = AverageFT.AsIFFT(false, PlanBack, true);
+                
+                Image Average = null;
+                if (options.DoFourierCrop)
+                {
+                    DimsExtraction = new int3(options.ParticleFourierCropBox, options.ParticleFourierCropBox, NParticles);
+                    DimsParticle = DimsExtraction;
+                    Image AverageFTCropped = AverageFT.AsPadded(new int2(options.ParticleFourierCropBox));
+                    //int PlanBackCropped = GPU.CreateIFFTPlan(DimsExtraction.Slice(), (uint)NParticles);
+                    //Average = AverageFTCropped.AsIFFT(false, PlanBackCropped, true);
+                    Average = AverageFT.AsIFFT(false, PlanBack, true);
+                    AverageFTCropped.Dispose();
+                    PixelSize = (float)(options.PixelSizeMean * options.BoxSize / options.ParticleFourierCropBox);
+                    PixelDelta = (float)(options.PixelSizeDelta * options.BoxSize / options.ParticleFourierCropBox);
+                    //GPU.DestroyFFTPlan(PlanBackCropped);
+                } else
+                {
+                    Average = AverageFT.AsIFFT(false, PlanBack, true);
+                }
+
                 AverageFT.Dispose();
 
                 if (!options.DoStack && options.CorrectAnisotropy) // In case of DoStack, the individual frames have already been corrected
+                {
                     GPU.CorrectMagAnisotropy(Average.GetDevice(Intent.Read),
                                              new int2(DimsExtraction),
                                              Average.GetDevice(Intent.Write),
                                              new int2(DimsExtraction),
-                                             (float)(options.PixelSizeMean + options.PixelSizeDelta / 2),
-                                             (float)(options.PixelSizeMean - options.PixelSizeDelta / 2),
+                                             (float)(PixelSize + PixelDelta / 2),
+                                             (float)(PixelSize - PixelDelta / 2),
                                              (float)options.PixelSizeAngle * Helper.ToRad,
                                              1,
                                              (uint)NParticles);
+                }
 
                 Image AverageCropped = Average.AsPadded(new int2(DimsParticle));
+                
                 Average.Dispose();
 
                 #region Subtract background plane
@@ -3633,10 +3655,21 @@ namespace Warp
 
                 WriteAverageAsync = new Task(() =>
                 {
-                    AverageCropped.WriteMRC(ParticlesDir + RootName + options.Suffix + ".mrcs", (float)options.BinnedPixelSizeMean, true);
+                    AverageCropped.WriteMRC(ParticlesDir + RootName + options.Suffix + ".mrcs", PixelSize, true);
                     AverageCropped.Dispose();
                 });
                 WriteAverageAsync.Start();
+            }
+
+            if (options.DoFourierCrop) //Reset to original dimensions
+            {
+                DimsParticle = new int3(options.BoxSize, options.BoxSize, NParticles);
+                DimsPreflip = DimsParticle.MultXY(2);
+                DimsExtraction = options.PreflipPhases ? DimsPreflip : DimsParticle;
+
+                PixelSize = (float)options.BinnedPixelSizeMean;
+                PixelDelta = (float)options.BinnedPixelSizeDelta;
+                PixelAngle = (float)options.PixelSizeAngle * Helper.ToRad;
             }
 
             if (options.DoDenoisingPairs)
@@ -3718,6 +3751,7 @@ namespace Warp
 
             IsProcessing = false;
         }
+
 
         #endregion
 
@@ -8805,6 +8839,12 @@ namespace Warp
     public class ProcessingOptionsParticlesExport : ProcessingOptionsBase
     {
         [WarpSerializable]
+        public int ParticleFourierCropBox { get; set; } = 2;
+
+        [WarpSerializable]
+        public bool DoFourierCrop { get; set; } = false;
+
+        [WarpSerializable]
         public string Suffix { get; set; }
         [WarpSerializable]
         public int BoxSize { get; set; }
@@ -8860,7 +8900,8 @@ namespace Warp
                    DosePerAngstromFrame == other.DosePerAngstromFrame &&
                    Voltage == other.Voltage &&
                    CorrectAnisotropy == other.CorrectAnisotropy &&
-                   PreflipPhases == other.PreflipPhases;
+                   PreflipPhases == other.PreflipPhases &&
+                   ParticleFourierCropBox == other.ParticleFourierCropBox;
         }
 
         public static bool operator ==(ProcessingOptionsParticlesExport left, ProcessingOptionsParticlesExport right)
@@ -8953,6 +8994,12 @@ namespace Warp
         [WarpSerializable]
         public bool ExportNormalize { get; set; }
 
+        [WarpSerializable]
+        public int FourierCropBox { get; set; }
+
+        [WarpSerializable]
+        public bool DoFourierCrop { get; set; }
+
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
@@ -8971,7 +9018,8 @@ namespace Warp
                    ExportParticles == other.ExportParticles &&
                    ExportBoxSize == other.ExportBoxSize &&
                    ExportInvert == other.ExportInvert &&
-                   ExportNormalize == other.ExportNormalize;
+                   ExportNormalize == other.ExportNormalize &&
+                   (!DoFourierCrop || FourierCropBox == other.FourierCropBox);
         }
 
         public static bool operator ==(ProcessingOptionsBoxNet left, ProcessingOptionsBoxNet right)

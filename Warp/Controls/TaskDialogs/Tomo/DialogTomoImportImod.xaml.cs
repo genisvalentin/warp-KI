@@ -195,9 +195,12 @@ namespace Warp.Controls.TaskDialogs.Tomo
                                                 NewEntry.Name = Parts[1].Substring(Parts[1].LastIndexOf("\\") + 1);
                                             else if (Parts[0] == "DateTime")
                                             {
-                                                NewEntry.Time = DateTime.ParseExact(Parts[1], "dd-MMM-yy  HH:mm:ss", CultureInfo.InvariantCulture);
+                                                //NewEntry.Time = DateTime.ParseExact(Parts[1], "dd-MMM-yy  HH:mm:ss", CultureInfo.InvariantCulture);
+                                                NewEntry.Time = DateTime.Parse(Parts[1], CultureInfo.InvariantCulture);
                                                 FoundTime = true;
                                             }
+                                            else if (Parts[0] == "PriorRecordDose")
+                                                NewEntry.PriorRecordDose = float.Parse(Parts[1], CultureInfo.InvariantCulture);
                                         }
 
                                         if (mdocNames.Value.Count == 1)
@@ -226,7 +229,13 @@ namespace Warp.Controls.TaskDialogs.Tomo
                             float Accumulated = 0;
                             foreach (var entry in SortedTime)
                             {
-                                Accumulated += entry.Dose;
+                                if (entry.PriorRecordDose > 0)
+                                {
+                                    Accumulated = entry.Dose + entry.PriorRecordDose;
+                                } else
+                                {
+                                    Accumulated += entry.Dose;
+                                }
                                 entry.Dose = Accumulated;
                             }
 

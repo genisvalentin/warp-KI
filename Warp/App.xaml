@@ -8,6 +8,7 @@
              xmlns:lvc="clr-namespace:LiveCharts.Wpf;assembly=LiveCharts.Wpf"
              xmlns:PresentationOptions="http://schemas.microsoft.com/winfx/2006/xaml/presentation/options"
              xmlns:Dialogs="clr-namespace:MahApps.Metro.Controls.Dialogs;assembly=MahApps.Metro"
+             xmlns:iconPacks="http://metro.mahapps.com/winfx/xaml/iconpacks"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
         <ResourceDictionary>
@@ -68,6 +69,26 @@
             </Style>
             <Style x:Key="MenuLevel2" BasedOn="{StaticResource MetroTabItem}" TargetType="{x:Type TabItem}">
                 <Setter Property="m:ControlsHelper.HeaderFontSize" Value="20"></Setter>
+            </Style>
+            <Style x:Key="PlusTrayStyle" TargetType="iconPacks:PackIconMaterial">
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding Path=IsQueued}" Value="False">
+                        <Setter Property="iconPacks:PackIconMaterial.Visibility" Value="Visible"/>
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding Path=IsQueued}" Value="True">
+                        <Setter Property="iconPacks:PackIconMaterial.Visibility" Value="Collapsed"/>
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+            <Style x:Key="MinusTrayStyle" TargetType="iconPacks:PackIconMaterial">
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding Path=IsQueued}" Value="False">
+                        <Setter Property="iconPacks:PackIconMaterial.Visibility" Value="Collapsed"/>
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding Path=IsQueued}" Value="True">
+                        <Setter Property="iconPacks:PackIconMaterial.Visibility" Value="Visible"/>
+                    </DataTrigger>
+                </Style.Triggers>
             </Style>
 
 

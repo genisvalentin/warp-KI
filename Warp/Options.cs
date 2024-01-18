@@ -1,12 +1,19 @@
 ﻿using Newtonsoft.Json;
+using Renci.SshNet;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Diagnostics.Contracts;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
 using System.Xml;
 using System.Xml.XPath;
 using Warp.Tools;
@@ -23,8 +30,8 @@ namespace Warp
         public ObservableCollection<string> InputDatTypes
         {
             get { return _InputDatTypes; }
-        } 
-        
+        }
+
         #region Pixel size
 
         private decimal _PixelSizeX = 1.35M;
@@ -108,9 +115,52 @@ namespace Warp
             set { if (value != _ProcessPicking) { _ProcessPicking = value; OnPropertyChanged(); } }
         }
 
+        private bool _ProcessClassification = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool ProcessClassification
+        {
+            get { return _ProcessClassification; }
+            set { if (value != _ProcessClassification) { _ProcessClassification = value; OnPropertyChanged(); } }
+        }
+
+        private bool _IsNotProcessing = true;
+        public bool IsNotProcessing { 
+            get { return _IsNotProcessing; }
+            set {
+                if (value != _IsNotProcessing) { _IsNotProcessing = value; OnPropertyChanged(); }
+            } 
+        }
+
+        private bool _IsProcessing = false;
+        public bool IsProcessing
+        {
+            get { return _IsProcessing; }
+            set { if (value != _IsProcessing) { 
+                    _IsProcessing = value; 
+                    IsNotProcessing = !value;
+                    OnPropertyChanged(); } }
+        }
+
+        private bool _ProcessStacker = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool ProcessStacker
+        {
+            get { return _ProcessStacker; }
+            set { if (value != _ProcessStacker) { _ProcessStacker = value; OnPropertyChanged(); } }
+        }
+
         #endregion
 
         #region Sub-categories
+
+        private OptionsTiltSeries _TiltSeries;
+        public OptionsTiltSeries TiltSeries
+        {
+            get { return _TiltSeries; }
+            set { if (value != _TiltSeries) { _TiltSeries = value; OnPropertyChanged(); } }
+        }
 
         private OptionsImport _Import = new OptionsImport();
         public OptionsImport Import
@@ -145,6 +195,20 @@ namespace Warp
         {
             get { return _Picking; }
             set { if (value != _Picking) { _Picking = value; OnPropertyChanged(); } }
+        }
+
+        private OptionsClassification _Classification = new OptionsClassification();
+        public OptionsClassification Classification
+        {
+            get { return _Classification; }
+            set { if (value != _Classification) { _Classification = value; OnPropertyChanged(); } }
+        }
+
+        private OptionsStacker _Stacker = new OptionsStacker();
+        public OptionsStacker Stacker
+        {
+            get { return _Stacker; }
+            set { if (value != _Stacker) { _Stacker = value; OnPropertyChanged(); } }
         }
 
         private OptionsTomo _Tomo = new OptionsTomo();
@@ -189,6 +253,21 @@ namespace Warp
             set { if (value != _Runtime) { _Runtime = value; OnPropertyChanged(); } }
         }
 
+        private OptionsSshSettings _SshSettings = new OptionsSshSettings();
+        public OptionsSshSettings SshSettings
+        {
+            get { return _SshSettings; }
+            set { if (value != _SshSettings) { _SshSettings = value; OnPropertyChanged(); } }
+        }
+
+        private OptionsAretomoSettings _AretomoSettings = new OptionsAretomoSettings();
+        public OptionsAretomoSettings AretomoSettings
+        {
+            get { return _AretomoSettings; }
+            set { if (value != _AretomoSettings) { _AretomoSettings = value; OnPropertyChanged(); } }
+        }
+
+
         #endregion
 
         #region Runtime
@@ -201,6 +280,15 @@ namespace Warp
             CTF.OnPropertyChanged("RangeMax");
             Movement.OnPropertyChanged("RangeMin");
             Movement.OnPropertyChanged("RangeMax");
+
+            Console.WriteLine($"Binned pixel size {Runtime.BinnedPixelSizeMean}");
+            TiltSeries.RuntimePixelSize = Runtime.BinnedPixelSizeMean;
+            TiltSeries.PixelSpacingUnbinned = PixelSizeMean;
+            foreach (var ts in TiltSeries.TiltSeriesList)
+            {
+                ts.PixelSpacing = Runtime.BinnedPixelSizeMean;
+                ts.PixelSpacingUnbinned = PixelSizeMean;
+            }
         }
 
         public decimal PixelSizeMean => (PixelSizeX + PixelSizeY) * 0.5M;
@@ -231,11 +319,15 @@ namespace Warp
             Movement.PropertyChanged += SubOptions_PropertyChanged;
             Grids.PropertyChanged += SubOptions_PropertyChanged;
             Picking.PropertyChanged += SubOptions_PropertyChanged;
+            Classification.PropertyChanged += SubOptions_PropertyChanged;
+            Stacker.PropertyChanged += SubOptions_PropertyChanged;
             Tomo.PropertyChanged += SubOptions_PropertyChanged;
             Export.PropertyChanged += SubOptions_PropertyChanged;
             Tasks.PropertyChanged += SubOptions_PropertyChanged;
             Filter.PropertyChanged += SubOptions_PropertyChanged;
             Advanced.PropertyChanged += SubOptions_PropertyChanged;
+            SshSettings.PropertyChanged += SubOptions_PropertyChanged;
+            AretomoSettings.PropertyChanged += SubOptions_PropertyChanged;
         }
 
         private void SubOptions_PropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -264,6 +356,14 @@ namespace Warp
                 OnPropertyChanged("Filter." + e.PropertyName);
             else if (sender == Advanced)
                 OnPropertyChanged("Advanced." + e.PropertyName);
+            else if (sender == Stacker)
+                OnPropertyChanged("Stacker." + e.PropertyName);
+            else if (sender == Classification)
+                OnPropertyChanged("Classification." + e.PropertyName);
+            else if (sender == SshSettings)
+                OnPropertyChanged("SshSettings." + e.PropertyName);
+            else if (sender == AretomoSettings)
+                OnPropertyChanged("AretomoSettings." + e.PropertyName);
         }
 
         public void Save(string path)
@@ -274,8 +374,24 @@ namespace Warp
             Writer.Indentation = 1;
             Writer.WriteStartDocument();
             Writer.WriteStartElement("Settings");
-            
+
             WriteToXML(Writer);
+
+            Writer.WriteStartElement("Stacker");
+            Stacker.WriteToXML(Writer);
+            Writer.WriteEndElement();
+
+            Writer.WriteStartElement("Classification");
+            Classification.WriteToXML(Writer);
+            Writer.WriteEndElement();
+
+            Writer.WriteStartElement("SshSettings");
+            SshSettings.WriteToXML(Writer);
+            Writer.WriteEndElement();
+
+            Writer.WriteStartElement("AretomoSettings");
+            AretomoSettings.WriteToXML(Writer);
+            Writer.WriteEndElement();
 
             Writer.WriteStartElement("Import");
             Import.WriteToXML(Writer);
@@ -338,6 +454,10 @@ namespace Warp
 
                     ReadFromXML(Reader);
 
+                    Stacker.ReadFromXML(Reader.SelectSingleNode("Stacker"));
+                    Classification.ReadFromXML(Reader.SelectSingleNode("Classification"));
+                    SshSettings.ReadFromXML(Reader.SelectSingleNode("SshSettings"));
+                    AretomoSettings.ReadFromXML(Reader.SelectSingleNode("AretomoSettings"));
                     Import.ReadFromXML(Reader.SelectSingleNode("Import"));
                     CTF.ReadFromXML(Reader.SelectSingleNode("CTF"));
                     Movement.ReadFromXML(Reader.SelectSingleNode("Movement"));
@@ -490,7 +610,7 @@ namespace Warp
                 GainTranspose = Import.GainTranspose,
                 DosePerAngstromFrame = Import.DosePerAngstromFrame,
 
-                DoAverage = true, //Export.DoAverage,
+                DoAverage = Export.DoAverage,
                 DoStack = Export.DoStack,
                 DoDeconv = Export.DoDeconvolve,
                 DeconvolutionStrength = Export.DeconvolutionStrength,
@@ -597,7 +717,7 @@ namespace Warp
                 HealpixOrder = (int)Tasks.TomoMatchHealpixOrder,
 
                 Supersample = 5,
-                
+
                 NResults = (int)Tasks.TomoMatchNResults,
 
                 Invert = Tasks.InputInvert,
@@ -622,6 +742,7 @@ namespace Warp
                 GainFlipX = Import.GainFlipX,
                 GainFlipY = Import.GainFlipY,
                 GainTranspose = Import.GainTranspose,
+                
 
                 OverwriteFiles = true,
 
@@ -635,7 +756,9 @@ namespace Warp
                 ExportParticles = Picking.DoExport,
                 ExportBoxSize = Picking.BoxSize,
                 ExportInvert = Picking.Invert,
-                ExportNormalize = Picking.Normalize
+                ExportNormalize = Picking.Normalize,
+                FourierCropBox = Picking.FourierCropBox,
+                DoFourierCrop = Picking.DoFourierCrop,
             };
         }
 
@@ -706,11 +829,11 @@ namespace Warp
                 Dimensions = new float3((float)Tomo.DimensionsX,
                                         (float)Tomo.DimensionsY,
                                         (float)Tomo.DimensionsZ),
-                
+
                 TemplatePixel = Tasks.TomoMatchTemplatePixel,
                 TemplateDiameter = Tasks.TomoMatchTemplateDiameter,
                 TemplateFraction = Tasks.TomoMatchTemplateFraction,
-                
+
                 SubVolumeSize = 192,
                 Symmetry = Tasks.TomoMatchSymmetry,
                 HealpixOrder = (int)Tasks.TomoMatchHealpixOrder,
@@ -784,6 +907,54 @@ namespace Warp
                 if (value != _Folder)
                 {
                     _Folder = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private string _UserFolder = "";
+        [WarpSerializable]
+        [JsonProperty]
+        public string UserFolder
+        {
+            get { return _UserFolder; }
+            set
+            {
+                if (value != _UserFolder)
+                {
+                    _UserFolder = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private bool _InvertAngles = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool InvertAngles
+        {
+            get { return _InvertAngles; }
+            set
+            {
+                if (value != _InvertAngles)
+                {
+                    _InvertAngles = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private string _MicroscopePCFolder = "";
+        [WarpSerializable]
+        [JsonProperty]
+        public string MicroscopePCFolder
+        {
+            get { return _MicroscopePCFolder; }
+            set
+            {
+                if (value != _MicroscopePCFolder)
+                {
+                    _MicroscopePCFolder = value;
                     OnPropertyChanged();
                 }
             }
@@ -1449,6 +1620,24 @@ namespace Warp
             set { if (value != _BoxSize) { _BoxSize = value; OnPropertyChanged(); } }
         }
 
+        private int _FourierCropBox = 2;
+        [WarpSerializable]
+        [JsonProperty]
+        public int FourierCropBox
+        {
+            get { return _FourierCropBox; }
+            set { if (value != _FourierCropBox) { _FourierCropBox = value; OnPropertyChanged(); } }
+        }
+
+        private bool _DoFourierCrop = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool DoFourierCrop
+        {
+            get { return _DoFourierCrop; }
+            set { if (value!= _DoFourierCrop) { _DoFourierCrop = value; OnPropertyChanged(); } }
+        }
+
         private bool _Invert = true;
         [WarpSerializable]
         [JsonProperty]
@@ -1484,9 +1673,346 @@ namespace Warp
             get { return _RunningWindowLength; }
             set { if (value != _RunningWindowLength) { _RunningWindowLength = value; OnPropertyChanged(); } }
         }
+
+		private bool _WriteOpticGroups = false;
+		[WarpSerializable]
+		[JsonProperty]
+		public bool WriteOpticGroups
+		{
+			get { return _WriteOpticGroups; }
+			set { if (value != _WriteOpticGroups) { _WriteOpticGroups = value; OnPropertyChanged(); } }
+		}
+
+        private int _WriteOpticGroupsN = 500;
+        [WarpSerializable]
+        [JsonProperty]
+        public int WriteOpticGroupsN
+        {
+            get { return _WriteOpticGroupsN; }
+            set { if (value != _WriteOpticGroupsN) { _WriteOpticGroupsN = value; OnPropertyChanged(); } }
+        }
+
+        private bool _NewOpticGroups = false;
+		[WarpSerializable]
+		[JsonProperty]
+		public bool NewOpticGroups
+		{
+			get { return _NewOpticGroups; }
+			set { if (value != _NewOpticGroups) { _NewOpticGroups = value; OnPropertyChanged(); } }
+		}
+
+		private int _NewOpticGroupsEvery = 1;
+		[WarpSerializable]
+		[JsonProperty]
+		public int NewOpticGroupsEvery
+		{
+			get { return _NewOpticGroupsEvery; }
+			set { if (value != _NewOpticGroupsEvery) { _NewOpticGroupsEvery = value; OnPropertyChanged(); } }
+		}
+	}
+
+	[JsonObject(MemberSerialization.OptIn)]
+	public class OptionsClassification : WarpBase
+	{
+        private string _SshKey;
+        [WarpSerializable]
+        [JsonProperty]
+        public string SshKey
+        {
+            get { return _SshKey; }
+            set
+            {
+                if (value != _SshKey && File.Exists(value))
+                {
+                    try
+                    {
+                        SshKeyObject = new PrivateKeyFile(value);
+                        _SshKey = value;
+                        OnPropertyChanged();
+                    }
+                    catch (Exception e)
+                    {
+                        //do nothing
+                    }
+                }
+            }
+        }
+
+        public PrivateKeyFile SshKeyObject { get; set; }
+
+        private string _UserName;
+        [WarpSerializable]
+        [JsonProperty]
+        public string UserName
+        {
+            get { return _UserName; }
+            set { if (value != _UserName) { _UserName = value; OnPropertyChanged(); } }
+        }
+
+        private string _Server;
+        [WarpSerializable]
+        [JsonProperty]
+        public string Server
+        {
+            get { return _Server; }
+            set {
+                if (value != _Server)
+                {
+                    _Server = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private string _Ip;
+        [WarpSerializable]
+        [JsonProperty]
+        public string Ip
+        {
+            get { return _Ip; }
+            set
+            {
+                if (value != _Ip)
+                {
+                    var s = value.Split(':').ToList();
+                    if (s.Count > 1)
+                    {
+                        int p;
+                        Port = int.TryParse(s.Last(), out p) ? p : 22;
+                        s.Last();
+                        s.RemoveAt(s.Count - 1);
+                        _Server = string.Join(":", s);
+                    }
+                    else
+                    {
+                        _Server = value;
+                    }
+                    _Ip = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+
+        private int _Port = 22;
+        [WarpSerializable]
+        [JsonProperty]
+        public int Port
+        {
+            get { return _Port; }
+            set
+            {
+                if (value != _Port)
+                {
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private bool _class2D = true;
+		[WarpSerializable]
+		[JsonProperty]
+		public bool class2D
+		{
+			get { return _class2D; }
+			set { if (value != _class2D) { _class2D = value; OnPropertyChanged(); } }
+		}
+
+		private bool _class3D = false;
+		[WarpSerializable]
+		[JsonProperty]
+		public bool class3D
+		{
+			get { return _class3D; }
+			set { if (value != _class3D) { _class3D = value; OnPropertyChanged(); } }
+		}
+
+		private int _NClasses = 2;
+		[WarpSerializable]
+		[JsonProperty]
+		public int NClasses
+		{
+			get { return _NClasses; }
+			set { if (value != _NClasses) { _NClasses = value; OnPropertyChanged(); } }
+		}
+
+        private int _NParticles = 1000;
+        [WarpSerializable]
+        [JsonProperty]
+        public int NParticles
+        {
+            get { return _NParticles; }
+            set { if (value != _NParticles) { _NParticles = value; OnPropertyChanged(); } }
+        }
+
+        private string _Results = "Results not available";
+        [WarpSerializable]
+        [JsonProperty]
+        public string Results
+        {
+            get { return _Results; }
+            set { if (value != _Results) { _Results = value; OnPropertyChanged(); } }
+        }
+
+        private string _Countdown = "Results not available";
+        public string Countdown
+        {
+            get { return _Countdown; }
+            set { if (value != _Countdown) { _Countdown = value; OnPropertyChanged(); } }
+        }
+
+
+        private string _EveryNParticles;
+        [WarpSerializable]
+        [JsonProperty]
+        public string EveryNParticles
+        {
+            get { return _EveryNParticles; }
+            set { if (value != _EveryNParticles) { _EveryNParticles = value; OnPropertyChanged(); } }
+        }
+
+        private bool _DoEveryNParticles = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool DoEveryNParticles
+        {
+            get { return _DoEveryNParticles; }
+            set { if (value != _DoEveryNParticles) { _DoEveryNParticles = value; OnPropertyChanged(); } }
+        }
+
+        private string _EveryHours;
+        [WarpSerializable]
+        [JsonProperty]
+        public string EveryHours
+        {
+            get { return _EveryHours; }
+            set { if (value != _EveryHours) { _EveryHours = value; OnPropertyChanged(); } }
+        }
+
+        private bool _DoEveryHours = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool DoEveryHours
+        {
+            get { return _DoEveryHours; }
+            set { if (value != _DoEveryHours) { _DoEveryHours = value; OnPropertyChanged(); } }
+        }
+
+        private bool _DoManualClassification = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool DoManualClassification
+        {
+            get { return _DoManualClassification; }
+            set { if (value != _DoManualClassification) { _DoManualClassification = value; OnPropertyChanged(); } }
+        }
+
+        private bool _DoImmediateClassification = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool DoImmediateClassification
+        {
+            get { return _DoImmediateClassification; }
+            set { if (value != _DoImmediateClassification) { _DoImmediateClassification = value; OnPropertyChanged(); } }
+        }
+
+        private bool _DoAtSessionEnd = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool DoAtSessionEnd
+        {
+            get { return _DoAtSessionEnd; }
+            set { if (value != _DoAtSessionEnd) { _DoAtSessionEnd = value; OnPropertyChanged(); } }
+        }
+
+        private string _ClassificationMountPoint = "";
+        [WarpSerializable]
+        [JsonProperty]
+        public string ClassificationMountPoint
+        {
+            get { return _ClassificationMountPoint; }
+            set { if (value != _ClassificationMountPoint) { _ClassificationMountPoint = value; OnPropertyChanged(); } }
+        }
+
+        private string _CryosparcProject = "";
+        [WarpSerializable]
+        [JsonProperty]
+        public string CryosparcProject
+        {
+            get { return _CryosparcProject; }
+            set { if (value != _CryosparcProject) { _CryosparcProject = value; OnPropertyChanged();} }
+        }
+
+        private string _CryosparcProjectName = "";
+        [WarpSerializable]
+        [JsonProperty]
+        public string CryosparcProjectName
+        {
+            get { return _CryosparcProjectName; }
+            set { if (value != _CryosparcProjectName) { _CryosparcProjectName = value; OnPropertyChanged(); } }
+        }
+
+        private string _CryosparcProjectDir = "";
+        [WarpSerializable]
+        [JsonProperty]
+        public string CryosparcProjectDir
+        {
+            get { return _CryosparcProjectDir; }
+            set { if (value != _CryosparcProjectDir) { _CryosparcProjectDir = value; OnPropertyChanged(); } }
+        }
+
+        private string _CryosparcUserEmail = "";
+        [WarpSerializable]
+        [JsonProperty]
+        public string CryosparcUserEmail
+        {
+            get { return _CryosparcUserEmail; }
+            set { if (value != _CryosparcUserEmail) { _CryosparcUserEmail = value; OnPropertyChanged(); } }
+        }
+
+        private string _CryosparcLane = "default";
+        [WarpSerializable]
+        [JsonProperty]
+        public string CryosparcLane
+        {
+            get { return _CryosparcLane; }
+            set { if (value != _CryosparcLane) { _CryosparcLane = value; OnPropertyChanged(); } }
+        }
+
+        private string _CryosparcLicense = "837bd996-d55f-11eb-a911-a707e5386885";
+        [WarpSerializable]
+        [JsonProperty]
+        public string CryosparcLicense
+        {
+            get { return _CryosparcLicense; }
+            set { if (value != _CryosparcLicense) { _CryosparcLicense = value; OnPropertyChanged(); } }
+        }
     }
 
     [JsonObject(MemberSerialization.OptIn)]
+	public class OptionsStacker : WarpBase
+	{
+		private string _Folder = "";
+		[WarpSerializable]
+		[JsonProperty]
+		public string Folder
+		{
+			get { return _Folder; }
+			set { if (value != _Folder) { _Folder = value; OnPropertyChanged(); } }
+		}
+
+		private bool _GridScreening = false;
+		[WarpSerializable]
+		[JsonProperty]
+		public bool GridScreening
+		{
+			get { return _GridScreening; }
+			set { if (value != _GridScreening) { _GridScreening = value; OnPropertyChanged(); } }
+		}
+
+	}
+
+	[JsonObject(MemberSerialization.OptIn)]
     public class OptionsTomo : WarpBase
     {
         private decimal _DimensionsX = 3712;
@@ -1609,6 +2135,7 @@ namespace Warp
             get { return _SkipLastN; }
             set { if (value != _SkipLastN) { _SkipLastN = value; OnPropertyChanged(); } }
         }
+
     }
 
     public class OptionsTasks : WarpBase
@@ -2279,6 +2806,716 @@ namespace Warp
         {
             get { return _OverviewPlotHighlightID; }
             set { if (value != _OverviewPlotHighlightID) { _OverviewPlotHighlightID = value; OnPropertyChanged(); } }
+        }
+    }
+
+    [JsonObject(MemberSerialization.OptIn)]
+    public class OptionsSshSettings : WarpBase
+    {
+        private string _iP;
+        [WarpSerializable]
+        [JsonProperty]
+        public string IP
+        {
+            get { return _iP; }
+            set
+            {
+                if (value != _iP)
+                {
+                    var s = value.Split(':').ToList();
+                    if (s.Count > 1)
+                    {
+                        int p;
+                        Port = int.TryParse(s.Last(), out p) ? p : 22;
+                        s.RemoveAt(s.Count - 1);
+                        Server = string.Join(":", s);
+                    } else { 
+                        Server = value; 
+                    }
+                    _iP = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private string _Server;
+        [WarpSerializable]
+        [JsonProperty]
+        public string Server
+        {
+            get { return _Server; }
+            set { 
+                if (value != _Server)
+                {
+                    _Server = value;
+                    OnPropertyChanged();
+                } 
+            }
+        }
+
+        private int _Port = 22;
+        [WarpSerializable]
+        [JsonProperty]
+        public int Port
+        {
+            get { return _Port; }
+            set
+            {
+                if (value != _Port)
+                {
+                    _Port = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private string _Username;
+        [WarpSerializable]
+        [JsonProperty]
+        public string Username
+        {
+            get { return _Username; }
+            set
+            {
+                if (value != _Username)
+                {
+                    _Username = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private string _Password;
+        [WarpSerializable]
+        [JsonProperty]
+        public string Password
+        {
+            get { return _Password; }
+            set
+            {
+                if (value != _Password)
+                {
+                    _Password = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private string linuxPath;
+        [WarpSerializable]
+        [JsonProperty]
+        public string LinuxPath
+        {
+            get => linuxPath;
+            set
+            {
+                if (value != linuxPath)
+                {
+                    linuxPath = value.TrimEnd('/');
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public PrivateKeyFile SshKeyObject { get; set; }
+        private string _SshKey;
+        [WarpSerializable]
+        [JsonProperty]
+        public string SshKey
+        {
+            get { return _SshKey; }
+            set
+            {
+                if (value != _SshKey && File.Exists(value))
+                {
+                    try
+                    {
+                        SshKeyObject = new PrivateKeyFile(value);
+                        _SshKey = value;
+                        OnPropertyChanged();
+                    }
+                    catch (Exception e)
+                    {
+                        //do nothing
+                    }
+                }
+            }
+        }
+
+        private bool _linuxServerOk;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool LinuxServerOk
+        {
+            get => _linuxServerOk;
+            private set
+            {
+                if (value != _linuxServerOk)
+                {
+                    Console.WriteLine("LinuxServerOK");
+                    _linuxServerOk = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private string _topazEnv;
+        [WarpSerializable]
+        [JsonProperty]
+        public string TopazEnv
+        {
+            get { return _topazEnv; }
+            set { if (value != _topazEnv) { _topazEnv = value; OnPropertyChanged(); } }
+        }
+
+        public void TestLinuxServerConnection()
+        {
+            Console.WriteLine("Testing linux server");
+            if (IP == "" || Username == "" || SshKeyObject == null || LinuxPath == "")
+            {
+                LinuxServerOk = false;
+                Auto = false;
+                return;
+            }
+            try
+            {
+                using (var sshclient = new SshClient(Server, Port, Username, SshKeyObject))
+                {
+                    sshclient.Connect();
+                    using (var stream = sshclient.CreateShellStream("xterm", 80, 50, 1024, 1024, 1024))
+                    {
+                        var cmd = String.Format("if [[ -d '{0}' ]];then echo YES;fi; echo NO", LinuxPath);
+                        stream.WriteLine(cmd);
+                        while (stream.CanRead)
+                        {
+                            var line = stream.ReadLine();
+                            Console.WriteLine(line);
+                            if (line == "YES")
+                            {
+                                LinuxServerOk = true;
+                                break;
+                            }
+                            if (line == "NO")
+                            {
+                                LinuxServerOk = false;
+                                Auto = false;
+                                break;
+                            }
+                        }
+                    }
+                    sshclient.Disconnect();
+                }
+            }
+            catch (Exception ex)
+            {
+                LinuxServerOk = false;
+                Auto = false;
+            }
+        }
+
+        public CheckBox[] CheckboxesSshGPUS = new CheckBox[0];
+
+
+        public void ListGPUsSsh()
+        {
+            Console.WriteLine("Listing server GPUs");
+            var GPUlist = new List<int>();
+            if (IP == "" || Username == "" || SshKeyObject == null || LinuxPath == "")
+            {
+                GPUlist.Add(0);
+                return;
+            }
+            try
+            {
+                using (var sshclient = new SshClient(Server, Port, Username, SshKeyObject))
+                {
+                    sshclient.Connect();
+                    using (var stream = sshclient.CreateShellStream("xterm", 80, 50, 1024, 1024, 1024))
+                    {
+                        var cmd = "nvidia-smi -L; echo DONE";
+                        stream.WriteLine(cmd);
+                        while (stream.CanRead)
+                        {
+                            var line = stream.ReadLine();
+                            Console.WriteLine(line);
+                            if (line.StartsWith("GPU"))
+                            {
+                                try
+                                {
+                                    Console.WriteLine("Found GPU {0}",line.Split(' ')[1].Trim(':'));
+                                    GPUlist.Add(int.Parse(line.Split(' ')[1].Trim(':')));
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine(ex.Message);
+                                }
+                            }
+                            if (line == "DONE")
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    sshclient.Disconnect();
+                }
+            }
+            catch (Exception ex)
+            {
+                LinuxServerOk = false;
+                Auto = false;
+            }
+            if (GPUlist.Count < 1) { GPUlist.Add(0); }
+
+            Console.WriteLine("Counted {0} GPUs in ssh server",GPUlist.Count);
+            CheckboxesSshGPUS = Helper.ArrayOfFunction(i =>
+            {
+                CheckBox NewCheckBox = new CheckBox
+                {
+                    //Foreground = System.Windows.Media.Brushes.White,
+                    Margin = new Thickness(10, 0, 10, 0),
+                    IsChecked = true,
+                    Opacity = 1,
+                    Focusable = false
+                };
+
+                return NewCheckBox;
+            }, GPUlist.Count);
+
+        }
+
+        private bool _Auto;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool Auto
+        {
+            get { return _Auto; }
+            set { if (value != _Auto) { _Auto = value; OnPropertyChanged(); } }
+        }
+
+    }
+
+    [JsonObject(MemberSerialization.OptIn)]
+    public class OptionsAretomoSettings : WarpBase
+        {
+
+        private int _GlobalBinning;
+        [WarpSerializable]
+        [JsonProperty]
+        public int GlobalBinning
+        {
+            get { return _GlobalBinning; }
+            set { if (value != _GlobalBinning) { _GlobalBinning = value; OnPropertyChanged(); } }
+        }
+
+        private float _GlobalDosePerTilt;
+        [WarpSerializable]
+        [JsonProperty]
+        public float GlobalDosePerTilt
+        {
+            get { return _GlobalDosePerTilt; }
+            set { if (value != _GlobalDosePerTilt) { _GlobalDosePerTilt = value; OnPropertyChanged(); } }
+        }
+
+        private float _GlobalTiltAxis;
+        [WarpSerializable]
+        [JsonProperty]
+        public float GlobalTiltAxis
+        {
+            get { return _GlobalTiltAxis; }
+            set { if (value != _GlobalTiltAxis) { _GlobalTiltAxis = value; OnPropertyChanged(); } }
+        }
+
+        private float _GlobalCs;
+        [WarpSerializable]
+        [JsonProperty]
+        public float GlobalCs
+        {
+            get { return _GlobalCs; }
+            set { if (value != _GlobalCs) { _GlobalCs = value; OnPropertyChanged(); } }
+        }
+
+        private bool _GlobalFlipVol;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool GlobalFlipVol
+        {
+            get { return _GlobalFlipVol; }
+            set { if (value != _GlobalFlipVol) { _GlobalFlipVol = value; OnPropertyChanged(); } }
+        }
+
+        private bool _GlobalSkipReconstruction;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool GlobalSkipReconstruction
+        {
+            get { return _GlobalSkipReconstruction; }
+            set { if (value != _GlobalSkipReconstruction) { _GlobalSkipReconstruction = value; OnPropertyChanged(); } }
+        }
+
+        private bool _GlobalUseWbp;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool GlobalUseWbp
+        {
+            get { return _GlobalUseWbp; }
+            set { if (value != _GlobalUseWbp) { _GlobalUseWbp = value; OnPropertyChanged(); } }
+        }
+
+        private float _GlobalDarkTol;
+        [WarpSerializable]
+        [JsonProperty]
+        public float GlobalDarkTol
+        {
+            get { return _GlobalDarkTol; }
+            set { if (value != _GlobalDarkTol) { _GlobalDarkTol = value; OnPropertyChanged(); } }
+        }
+
+        private int _GlobalOutImod;
+        [WarpSerializable]
+        [JsonProperty]
+        public int GlobalOutImod
+        {
+            get { return _GlobalOutImod; }
+            set { if (value != _GlobalOutImod) { _GlobalOutImod = value; OnPropertyChanged(); } }
+        }
+
+        private int _GlobalVolZ;
+        [WarpSerializable]
+        [JsonProperty]
+        public int GlobalVolZ
+        {
+            get { return _GlobalVolZ; }
+            set { if (value != _GlobalVolZ) { _GlobalVolZ = value; OnPropertyChanged(); } }
+        }
+
+        private int _GlobalTiltCorInt;
+        [WarpSerializable]
+        [JsonProperty]
+        public int GlobalTiltCorInt
+        {
+            get { return _GlobalTiltCorInt; }
+            set { if (value != _GlobalTiltCorInt) { _GlobalTiltCorInt = value; OnPropertyChanged(); } }
+        }
+
+        private int _GlobalTiltCorAng;
+        [WarpSerializable]
+        [JsonProperty]
+        public int GlobalTiltCorAng
+        {
+            get { return _GlobalTiltCorAng; }
+            set { if (value != _GlobalTiltCorAng) { _GlobalTiltCorAng = value; OnPropertyChanged(); } }
+        }
+
+        private int _GlobalAlignZ;
+        [WarpSerializable]
+        [JsonProperty]
+        public int GlobalAlignZ
+        {
+            get { return _GlobalAlignZ; }
+            set { if (value != _GlobalAlignZ) { _GlobalAlignZ = value; OnPropertyChanged(); } }
+        }
+
+        private int _PatchesToProcess;
+        [WarpSerializable]
+        [JsonProperty]
+        public int PatchesToProcess
+        {
+            get { return _PatchesToProcess; }
+            set { if (value != _PatchesToProcess) { _PatchesToProcess = value; OnPropertyChanged(); } }
+        }
+
+        private int _PatchesProcessed;
+        public int PatchesProcessed
+        {
+            get { return _PatchesProcessed; }
+            set { if (value != _PatchesProcessed) { _PatchesProcessed = value; OnPropertyChanged(); } }
+        }
+
+
+        private int _GlobalSamplePreTilt;
+        [WarpSerializable]
+        [JsonProperty]
+        public int GlobalSamplePreTilt
+        {
+            get { return _GlobalSamplePreTilt; }
+            set { if (value != _GlobalSamplePreTilt) { _GlobalSamplePreTilt = value; OnPropertyChanged(); } }
+        }
+
+        private int _NPatchesX = 5;
+        [WarpSerializable]
+        [JsonProperty]
+        public int NPatchesX
+        {
+            get { return _NPatchesX; }
+            set { if (value != _NPatchesX) { _NPatchesX = value; OnPropertyChanged(); } }
+        }
+
+        private int _NPatchesY = 4;
+        [WarpSerializable]
+        [JsonProperty]
+        public int NPatchesY
+        {
+            get { return _NPatchesY; }
+            set { if (value != _NPatchesY) { _NPatchesY = value; OnPropertyChanged(); } }
+        }
+
+        private bool _IncludeAll;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool IncludeAll
+        {
+            get { return _IncludeAll; }
+            set { if (value != _IncludeAll) { _IncludeAll = value; OnPropertyChanged(); } }
+        }
+
+        public OptionsAretomoSettings ShallowCopy()
+        {
+            return (OptionsAretomoSettings)this.MemberwiseClone();
+        }
+    }
+
+    public class OptionsTiltSeries : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        public List<TiltSeriesViewModel> TiltSeriesProcessQueue = new List<TiltSeriesViewModel>();
+
+        private Dictionary<int,List<Task>> RunningProcesses = new Dictionary<int, List<Task>>();
+
+        public ObservableCollection<TiltSeriesViewModel> TiltSeriesList { get; set; }
+
+        public OptionsSshSettings ConnectionSettings { get; set; }
+
+        private OptionsAretomoSettings aretomoSettings;
+        public OptionsAretomoSettings AretomoSettings
+        {
+            get => aretomoSettings;
+            set
+            {
+                if (value != aretomoSettings)
+                {
+                    aretomoSettings = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AretomoSettings)));
+                }
+            }
+        }
+
+        public OptionsAretomoSettings LocalAretomoSettings { get; set; }
+
+        private string mdocFilesDirectory;
+        public string MdocFilesDirectory
+        {
+            get => mdocFilesDirectory;
+            set
+            {
+                mdocFilesDirectory = value;
+                if (Directory.Exists(value))
+                {
+                    if (mdocFilesWatcher != null)
+                    {
+                        try
+                        {
+                            mdocFilesWatcher.Dispose();
+                        } catch { }
+                    }
+                    mdocFilesWatcher = new FileSystemWatcher(value, "*.mdoc");
+                    mdocFilesWatcher.EnableRaisingEvents = true;
+                    mdocFilesWatcher.NotifyFilter = NotifyFilters.Attributes
+                             | NotifyFilters.CreationTime
+                             | NotifyFilters.DirectoryName
+                             | NotifyFilters.FileName
+                             | NotifyFilters.LastAccess
+                             | NotifyFilters.LastWrite
+                             | NotifyFilters.Security
+                             | NotifyFilters.Size;
+                    mdocFilesWatcher.Created += OnMdocFileCreated;
+                    mdocFilesWatcher.IncludeSubdirectories = false;
+                    mdocFilesWatcher.EnableRaisingEvents = true;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MdocFilesDirectory)));
+                }
+            }
+        }
+
+        FileSystemWatcher mdocFilesWatcher;
+
+        public decimal RuntimePixelSize { get; set; }
+
+        public decimal PixelSpacingUnbinned { get; set; }
+
+        public OptionsTiltSeries(OptionsSshSettings connectionSettings, OptionsAretomoSettings aretomoSettings)
+        {
+            ConnectionSettings = connectionSettings;
+            AretomoSettings = aretomoSettings;
+            TiltSeriesList = new ObservableCollection<TiltSeriesViewModel>();
+            TiltSeriesList.CollectionChanged += OnTiltSeriesListChanged;
+            MdocFilesDirectory = "";
+            PropertyChanged += OnPropertyChanged;
+        }
+
+        public void OnPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == "MdocFilesDirectory")
+            {
+                ListAllMdocFiles();
+            }
+        }
+
+        public void ListAllMdocFiles()
+        {
+            if (!Directory.Exists(MdocFilesDirectory)) return;
+            foreach (var ts in TiltSeriesList)
+            {
+                ts.CancellationTokenSource.Cancel();
+            }
+            TiltSeriesList.Clear();
+            Application.Current.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.SystemIdle, new Action(() =>
+           {
+               foreach (var file in Directory.EnumerateFiles(MdocFilesDirectory, "*.mdoc").OrderBy(x => x))
+               {
+                   var ts = new TiltSeriesViewModel(file, ConnectionSettings, AretomoSettings, RuntimePixelSize, PixelSpacingUnbinned);
+                   if (!ts.SuccessfullyReadXmlProperties) ts.CopyGlobalSettings();
+                   TiltSeriesList.Add(ts);
+               }
+           }));
+        }
+
+        public void OnTiltSeriesListChanged(object sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (e.OldItems != null)
+            {
+                foreach (INotifyPropertyChanged item in e.OldItems)
+                    item.PropertyChanged -= OnTiltSeriesPropertyChanged;
+            }
+            if (e.NewItems != null)
+            {
+                foreach (INotifyPropertyChanged item in e.NewItems)
+                {
+                    try
+                    {
+                        var ts = (TiltSeriesViewModel)item;
+                        item.PropertyChanged += OnTiltSeriesPropertyChanged;
+                        Task.Run(() => ts.CheckFilesExist());
+                    }
+                    catch (InvalidCastException ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                        return;
+                    }
+                }
+            }
+        }
+
+        public async void RunQueue()
+        {
+            if (TiltSeriesProcessQueue.Count < 1) return;
+            if (ConnectionSettings.Auto)
+            {
+                List<string> enabledGPUsStr = new List<string>();
+                Application.Current.Dispatcher.Invoke(() =>
+               {
+                   enabledGPUsStr = ConnectionSettings.CheckboxesSshGPUS.Where(x => x.IsChecked == true).Select(x => x.Content.ToString().Substring(4)).ToList();
+
+               });
+                var enabledGPUs = enabledGPUsStr.Select(x => int.Parse(x));
+                int i = -1;
+                Task t;
+                TiltSeriesViewModel ts;
+                lock (TiltSeriesProcessQueue)
+                {
+                    lock (RunningProcesses)
+                    {
+                        foreach (var id in enabledGPUs)
+                        {
+                            var tasks = new List<Task>();
+                            if (RunningProcesses.TryGetValue(id, out tasks))
+                            {
+                                for (var j=0; j < tasks.Count; j++) //we remove any cancelled tasks
+                                {
+                                    if (tasks[j].IsCanceled) RunningProcesses[id].Remove(tasks[j]);
+                                }
+
+                                if (tasks.Count < 1) // 1 is the max number of processes that we allow per GPU
+                                {
+                                    i = id;
+                                    break;
+                                }
+                            }
+                            else
+                            {
+                                RunningProcesses.Add(id, new List<Task>());
+                                i = id;
+                                break;
+                            }
+                        }
+                        if (i < 0) return; //no gpu is free, return
+
+
+
+                        ts = TiltSeriesProcessQueue.First();
+                        TiltSeriesProcessQueue.RemoveAt(0);
+                        t = ts.TiltSeriesProcess(i);
+                        Console.WriteLine("Queuing {0} on {1}", ts.DisplayName, i);
+                        RunningProcesses[i].Add(t);
+                    }
+                }
+                await t;
+                lock (RunningProcesses)
+                {
+                    RunningProcesses[i].Remove(t);
+                }
+                ts.IsQueued = false;
+            }
+        }
+
+        private readonly SemaphoreSlim ParsingMdocFileSync = new SemaphoreSlim(1);
+
+        public async void OnMdocFileCreated(object sender, FileSystemEventArgs e)
+        {
+            await ParsingMdocFileSync.WaitAsync();
+            var file = e.FullPath;
+            var mdocfiles = new List<string>();
+            foreach (var ts in TiltSeriesList)
+            {
+                mdocfiles.Add(ts.MdocFile);
+            }
+
+            if (!mdocfiles.Contains(file))
+            {
+
+                var ts = new TiltSeriesViewModel(file, ConnectionSettings, AretomoSettings, RuntimePixelSize, PixelSpacingUnbinned);
+                ts.PixelSpacing = RuntimePixelSize;
+                ts.PixelSpacingUnbinned = PixelSpacingUnbinned;
+                while (!ts.IsInitialized)
+                {
+                    await Task.Delay(1000);
+                }
+
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    TiltSeriesList.Add(ts);
+                });
+            }
+            ParsingMdocFileSync.Release();
+        }
+
+        public void OnTiltSeriesPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            var ts = (TiltSeriesViewModel)sender;
+            if (e.PropertyName == "WarpStatus")
+            {
+                if (ts.Aretomo2PngStatus == jobStatus.Finished || ts.Aretomo2PngStatus == jobStatus.Failed) return;
+                if (ts.AretomoStatus == jobStatus.Failed || ts.NewstackStatus == jobStatus.Failed) return;
+                if (ts.WarpStatus == jobStatus.Finished)
+                {
+                    lock(TiltSeriesProcessQueue) {
+                        if (!TiltSeriesProcessQueue.Contains(ts) && ts.IsNotProcessing)
+                        {
+                            TiltSeriesProcessQueue.Add(ts);
+                            ts.IsQueued = true;
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
 using Warp.Tools;
 
 namespace Warp
@@ -193,7 +194,20 @@ namespace Warp
                                                 if (!fileName.Substring(fileName.Length - 8).ToLower().Contains("tomostar"))
                                                     Created = new Movie(fileName, ParticleFileNames);
                                                 else
+                                                {
                                                     Created = new TiltSeries(fileName);
+                                                    Console.WriteLine($"Found tomostar {fileName}");
+                                                    Application.Current.Dispatcher.Invoke(() =>
+                                                    {
+                                                        var mw = (MainWindow)Application.Current.MainWindow;
+                                                        if (mw.InvertAngles)
+                                                        {
+                                                            Console.WriteLine($"Inverting tilt angles for {fileName}");
+                                                            ((TiltSeries)Created).AreAnglesInverted = !((TiltSeries)Created).AreAnglesInverted;
+                                                        }
+                                                        Console.WriteLine($"Tilt angles for {fileName} are now {((TiltSeries)Created).AreAnglesInverted}");
+                                                    });
+                                                }
 
                                                 lock (Ripe)
                                                 {
@@ -256,7 +270,10 @@ namespace Warp
                                         if (!fileName.Substring(fileName.Length - 8).ToLower().Contains("tomostar"))
                                             Created = new Movie(fileName, ParticleFileNames);
                                         else
+                                        {
                                             Created = new TiltSeries(fileName);
+                                        }
+                                        
 
                                         lock (Ripe)
                                         {

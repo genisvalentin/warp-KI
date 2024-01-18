@@ -39,6 +39,7 @@ namespace WarpWorker
 
         static string OriginalStackOwner = "";
         static Image OriginalStack = null;
+        static Image ScaledStack = null;
 
         static Population MPAPopulation = null;
 
@@ -214,6 +215,10 @@ namespace WarpWorker
                         M.SaveMeta();
 
                         Console.WriteLine($"Exported {Coordinates.Length} particles for {Path}");
+                    }
+                    else if (Command.Name == "BinStack") {
+                        int bin = (int)Command.Content[0];
+                        OriginalStack = ScaleStack(OriginalStack, bin);
                     }
                     else if (Command.Name == "TomoProcessCTF")
                     {
@@ -603,6 +608,129 @@ namespace WarpWorker
                     GPULayersOutputFT[i].Dispose();
                     GPULayersScaled[i].Dispose();
                 }
+            }
+
+            foreach (var layer in GPULayers)
+                layer.Dispose();
+            foreach (var layer in GPULayers2)
+                layer.Dispose();
+
+            return stack;
+        }
+
+        static Image ScaleStack(Image originalStack, int bin)
+        {
+            #region Preparation
+            Image stack = null;
+
+            int NThreads = 6;
+            int GPUThreads = 2;
+
+            int CurrentDevice = GPU.GetDevice();
+
+            if (RawLayers == null || RawLayers.Length != NThreads || RawLayers[0].Length != originalStack.Dims.ElementsSlice())
+                RawLayers = Helper.ArrayOfFunction(i => new float[originalStack.Dims.ElementsSlice()], NThreads);
+
+            Image[] GPULayers = Helper.ArrayOfFunction(i => new Image(IntPtr.Zero, originalStack.Dims.Slice()), GPUThreads);
+            Image[] GPULayers2 = Helper.ArrayOfFunction(i => new Image(IntPtr.Zero, originalStack.Dims.Slice()), GPUThreads);
+
+            #endregion
+
+            int3 ScaledDims = new int3(originalStack.Dims.X / bin,
+                originalStack.Dims.Y / bin,
+                originalStack.Dims.Z);
+
+            stack = new Image(ScaledDims);
+            float[][] OriginalStackData = stack.GetHost(Intent.Write);
+
+            int[] PlanForw = Helper.ArrayOfFunction(i => GPU.CreateFFTPlan(originalStack.Dims.Slice(), 1), GPUThreads);
+            int[] PlanBack = Helper.ArrayOfFunction(i => GPU.CreateIFFTPlan(ScaledDims.Slice(), 1), GPUThreads);
+
+            Image[] GPULayersInputFT = Helper.ArrayOfFunction(i => new Image(IntPtr.Zero, originalStack.Dims.Slice(), true, true), GPUThreads);
+            Image[] GPULayersOutputFT = Helper.ArrayOfFunction(i => new Image(IntPtr.Zero, ScaledDims.Slice(), true, true), GPUThreads);
+
+            Image[] GPULayersScaled = Helper.ArrayOfFunction(i => new Image(IntPtr.Zero, ScaledDims.Slice()), GPUThreads);
+
+            object[] Locks = Helper.ArrayOfFunction(i => new object(), GPUThreads);
+
+            #region Load and scale
+
+            Helper.ForCPU(0, ScaledDims.Z, NThreads, threadID => GPU.SetDevice(DeviceID), (z, threadID) =>
+            {
+
+                /*
+                if (IsTiff)
+                    TiffNative.ReadTIFFPatient(50, 500, path, z, true, RawLayers[threadID]);
+                else if (IsEER)
+                    EERNative.ReadEERPatient(50, 500, path, z * 10, (z + 1) * 10, EERSupersample, RawLayers[threadID]);
+                else
+                    IOHelper.ReadMapFloatPatient(50, 500,
+                                                    path,
+                                                    HeaderlessDims,
+                                                    (int)HeaderlessOffset,
+                                                    ImageFormatsHelper.StringToType(HeaderlessType),
+                                                    new[] { z },
+                                                    null,
+                                                    new[] { RawLayers[threadID] });
+                */
+
+                int GPUThreadID = threadID % GPUThreads;
+
+                lock (Locks[GPUThreadID])
+                {
+                    //GPU.CopyHostToDevice(RawLayers[threadID], GPULayers[GPUThreadID].GetDevice(Intent.Write), RawLayers[threadID].Length);
+
+                    /*
+                    if (GainRef != null)
+                    {
+                        if (IsEER)
+                            GPULayers[GPUThreadID].DivideSlices(GainRef);
+                        else
+                            GPULayers[GPUThreadID].MultiplySlices(GainRef);
+                    }*/
+
+                    /*
+                    if (DefectMap != null)
+                    {
+                        GPU.CopyDeviceToDevice(GPULayers[GPUThreadID].GetDevice(Intent.Read),
+                                                GPULayers2[GPUThreadID].GetDevice(Intent.Write),
+                                                header.Dimensions.Elements());
+                        DefectMap.Correct(GPULayers2[GPUThreadID], GPULayers[GPUThreadID]);
+                    }
+
+
+                    GPU.Xray(GPULayers[GPUThreadID].GetDevice(Intent.Read),
+                                GPULayers2[GPUThreadID].GetDevice(Intent.Write),
+                                20f,
+                                new int2(header.Dimensions),
+                                1);
+                    */
+                    GPU.Scale(GPULayers2[GPUThreadID].GetDevice(Intent.Read),
+                                GPULayersScaled[GPUThreadID].GetDevice(Intent.Write),
+                                originalStack.Dims.Slice(),
+                                ScaledDims.Slice(),
+                                1,
+                                PlanForw[GPUThreadID],
+                                PlanBack[GPUThreadID],
+                                GPULayersInputFT[GPUThreadID].GetDevice(Intent.Write),
+                                GPULayersOutputFT[GPUThreadID].GetDevice(Intent.Write));
+
+                    GPU.CopyDeviceToHost(GPULayersScaled[GPUThreadID].GetDevice(Intent.Read),
+                                            OriginalStackData[z],
+                                            ScaledDims.ElementsSlice());
+                }
+
+            }, null);
+
+            #endregion
+
+            for (int i = 0; i < GPUThreads; i++)
+            {
+                GPU.DestroyFFTPlan(PlanForw[i]);
+                GPU.DestroyFFTPlan(PlanBack[i]);
+                GPULayersInputFT[i].Dispose();
+                GPULayersOutputFT[i].Dispose();
+                GPULayersScaled[i].Dispose();
             }
 
             foreach (var layer in GPULayers)

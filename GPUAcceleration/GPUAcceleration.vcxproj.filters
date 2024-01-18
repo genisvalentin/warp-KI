@@ -20,6 +20,7 @@
     <CudaCompile Include="MPARefine.cu" />
     <CudaCompile Include="PCA.cu" />
     <CudaCompile Include="RealspaceProjection.cu" />
+    <CudaCompile Include="Defects.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Angles.cpp" />
@@ -67,5 +68,8 @@
     <Filter Include="einspline">
       <UniqueIdentifier>{dbd6ae0e-2b0a-4945-bbd7-8473bd484f5d}</UniqueIdentifier>
     </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
   </ItemGroup>
 </Project>
