@@ -79,6 +79,7 @@ namespace Warp
             Options.TiltSeries.RuntimePixelSize = Options.Runtime.BinnedPixelSizeMean;
             Options.TiltSeries.PixelSpacingUnbinned = Options.PixelSizeMean;
             Options.TiltSeries.TiltSeriesList.CollectionChanged += OnTiltSeriesCollectionChanged;
+            Options.TiltSeries.TiltSeriesInitialized += OnTiltSeriesInitialized;
             #region Make sure everything is OK with GPUs
             try
             {
@@ -439,6 +440,30 @@ namespace Warp
         {
             LogToFile("Tilt series collection changed");
             UpdateStatsStatus();
+        }
+
+        private void OnTiltSeriesInitialized(object sender, PropertyChangedEventArgs e)
+        {
+            Movie[] Items = FileDiscoverer.GetImmutableFiles();
+
+            bool HaveCTF = Options.ProcessCTF || Items.Any(v => v.OptionsCTF != null && v.CTF != null);
+            bool HavePhase = Options.CTF.DoPhase || Items.Any(v => v.OptionsCTF != null && v.OptionsCTF.DoPhase);
+            bool HaveMovement = Options.ProcessMovement || Items.Any(v => v.OptionsMovement != null);
+            bool HaveParticles = Items.Any(m => m.HasParticleSuffix(Options.Filter.ParticlesSuffix));
+
+            ProcessingOptionsMovieCTF OptionsCTF = Options.GetProcessingMovieCTF();
+            ProcessingOptionsMovieMovement OptionsMovement = Options.GetProcessingMovieMovement();
+            ProcessingOptionsBoxNet OptionsBoxNet = Options.GetProcessingBoxNet();
+            ProcessingOptionsMovieExport OptionsExport = Options.GetProcessingMovieExport();
+
+            var ts = Options.TiltSeries.TiltSeriesList.Where(i => i.Name == e.PropertyName).First();
+            if (!ts.IsInitialized) return;
+            if (ts.IsTomogramAvailable) return;
+            for (int i = 0; i < Items.Length; i++)
+            {
+                ProcessingStatus Status = StatusBar.GetMovieProcessingStatus(Items[i], OptionsCTF, OptionsMovement, OptionsBoxNet, OptionsExport, Options);
+                ts.UpdateTiltStatus(Items[i], Status);
+            }
         }
 
         private void MainWindow_Closing(object sender, CancelEventArgs e)
@@ -1585,6 +1610,14 @@ namespace Warp
                                     .Where(movie => AllParticlesDict.ContainsKey(movie.Name))
                                     .ToDictionary(movie => movie, movie => AllParticlesDict[movie.Name]);
 
+                                if (Options.Picking.WriteOpticGroups)
+                                {
+                                    foreach (var m in AllMovieParticleRows)
+                                    {
+                                        _ = sessionManager.GetOpticsGroup(m.Key.Name);
+                                    }
+                                }
+
                                 await ProgressDialog.CloseAsync();
                             }
                         }
@@ -2037,7 +2070,6 @@ namespace Warp
                                         float PhaseShift = item.GridCTFPhase.GetInterpolated(new float3(0.5f)) * 180;
 
                                         List<List<string>> NewRows = new List<List<string>>();
-                                        if (Options.Picking.WriteOpticGroups) { og = sessionManager.GetOpticsGroup(item.Name); }
                                         for (int r = 0; r < Positions.Length; r++)
                                         {
                                             string[] Row = Helper.ArrayOfConstant("0", TableBoxNetAll.ColumnCount);
@@ -2059,7 +2091,7 @@ namespace Warp
                                             Row[TableBoxNetAll.GetColumnID("rlnMicrographName")] = movieToMicrographName(item.Name);
                                             if (Options.Picking.WriteOpticGroups)
                                             {
-                                                Row[TableBoxNetAll.GetColumnID("rlnOpticsGroup")] = og;
+                                                Row[TableBoxNetAll.GetColumnID("rlnOpticsGroup")] = "0";
                                             }
                                             NewRows.Add(Row.ToList());
                                         }
@@ -2111,13 +2143,23 @@ namespace Warp
 
                                             Task.Run(() =>
                                                 {
-                                                    if (Options.Picking.WriteOpticGroups && sessionManager.NOpticsGroup > 0)
-                                                    {
-                                                        sessionManager.UpdateOpticsGroup();
-                                                    }
+
 
                                                     Star TempTableAll = new Star(TableBoxNetAll.GetColumnNames());
                                                     TempTableAll.AddRow(RowsAll);
+
+                                                    if (Options.Picking.WriteOpticGroups && sessionManager.NOpticsGroup > 0)
+                                                    {
+                                                        int namid = TableBoxNetAll.GetColumnID("rlnMicrographName");
+                                                        int ogid = TableBoxNetAll.GetColumnID("rlnOpticsGroup");
+                                                        int c = 0;
+                                                        foreach (var row in TempTableAll.GetAllRows())
+                                                        {
+                                                            og = sessionManager.GetOpticsGroup(micrographToMovieName(row[namid]));
+                                                            TempTableAll.SetRowValue(c, ogid, og);
+                                                            c++;
+                                                        }
+                                                    }
 
                                                     bool SuccessAll = false;
                                                     while (!SuccessAll)
@@ -2157,6 +2199,19 @@ namespace Warp
                                                     Star TempTableGood = new Star(TableBoxNetAll.GetColumnNames());
                                                     TempTableGood.AddRow(RowsGood);
 
+                                                    if (Options.Picking.WriteOpticGroups && sessionManager.NOpticsGroup > 0)
+                                                    {
+                                                        int namid = TableBoxNetAll.GetColumnID("rlnMicrographName");
+                                                        int ogid = TableBoxNetAll.GetColumnID("rlnOpticsGroup");
+                                                        int c = 0;
+                                                        foreach (var row in TempTableGood.GetAllRows())
+                                                        {
+                                                            og = sessionManager.GetOpticsGroup(micrographToMovieName(row[namid]));
+                                                            TempTableGood.SetRowValue(c, ogid, og);
+                                                            c++;
+                                                        }
+                                                    }
+
                                                     if (Options.ProcessClassification)
                                                     {
                                                         sessionManager.NGoodParticles = RowsGood.Count();
@@ -2176,6 +2231,12 @@ namespace Warp
                                                             else
                                                             {
                                                                 TempTableGood.Save(PathBoxNetFiltered + "_" + item.RootName);
+                                                            }
+
+                                                            string particle_meta_path = Path.Combine(Options.Import.Folder, "goodparticles_cryosparc_input.star");
+                                                            if (sessionManager.NeedsCreateInputStar && !File.Exists(particle_meta_path))
+                                                            {
+                                                                File.Copy(Path.Combine(Options.Import.Folder, $"goodparticles_{BoxNetSuffix}.star"), particle_meta_path);
                                                             }
 
                                                             //TempTableGood.Save(PathBoxNetFiltered + "_" + item.RootName);
@@ -2519,7 +2580,7 @@ namespace Warp
             {
                 ProcessingStatus Status = StatusBar.GetMovieProcessingStatus(Items[i], OptionsCTF, OptionsMovement, OptionsBoxNet, OptionsExport, Options);
                 int ID = 0;
-                
+                /*
                 if (IsPreprocessing && Options.Picking.WriteOpticGroups)
                 {
                     lock(HasOpticsGroup)
@@ -2533,7 +2594,7 @@ namespace Warp
                             }
                         }
                     }
-                }
+                }*/
 
                 foreach (var ts in Options.TiltSeries.TiltSeriesList)
                 {
@@ -2567,10 +2628,11 @@ namespace Warp
                 }
                 ColorIDs[i] = ID;
             }
+            /*
             lock (HasOpticsGroup)
             {
                 HasOpticsGroup.AddRange(updatedOpticGroups);
-            }
+            }*/
 
             if (NOutdated > 0 && !IsPreprocessing && !Options.Classification.DoManualClassification)
             {
@@ -5021,7 +5083,6 @@ namespace Warp
                         string messageBoxText = String.Join("\n", failedToDelete.ToArray());
                         string caption = "Failed to delete some files";
                         await this.ShowMessageAsync(caption, messageBoxText);
-
                     }
                 }
                 await this.HideMetroDialogAsync(Dialog);
@@ -5276,50 +5337,71 @@ namespace Warp
 
             DialogContent.Info = $"Found {FilteredOutMovies.Count} items to delete";
 
-            DialogContent.Close += () =>
+            DialogContent.Close += async () =>
             {
-                if (DialogContent.Confirm)
+                string path = Options.Import.Folder;
+
+                Directory.CreateDirectory(Path.Combine(path, "Trash"));
+                List<string> failedtodelete = new List<string>();
+                lock (FilteredOutMovies)
                 {
-
-                    string path = Options.Import.Folder;
-
-                    Directory.CreateDirectory(Path.Combine(path, "Trash"));
-                    lock (FilteredOutMovies)
+                    foreach (var item in FilteredOutMovies)
                     {
-                        foreach (var item in FilteredOutMovies)
+                        Dispatcher.Invoke(() => DialogContent.Info = $"Deleting {item.Name}");
+                        try
                         {
-                            Dispatcher.Invoke(() => DialogContent.Info = $"Deleting {item.Name}");
-                            try
-                            {
-                                File.Move(item.Path, Path.Combine(path, "Trash", item.Name));
-                            }
-                            catch { };
-                            File.Delete(item.XMLPath);
-                            if (File.Exists(item.AveragePath)) File.Delete(item.AveragePath);
-                            if (File.Exists(item.DeconvolvedPath)) File.Delete(item.DeconvolvedPath);
-                            if (File.Exists(item.ThumbnailsPath)) File.Delete(item.ThumbnailsPath);
-                            if (File.Exists(Path.Combine(item.MatchingDir, item.RootName + ".star"))) File.Delete(Path.Combine(item.MatchingDir, item.RootName + ".star"));
-                            if (File.Exists(item.PowerSpectrumPath)) File.Delete(item.PowerSpectrumPath);
-                            if (File.Exists(item.MaskPath)) File.Delete(item.MaskPath);
-                            string BoxNetSuffix = Helper.PathToNameWithExtension(Options.Picking.ModelPath);
-                            string particles = Path.Combine(item.DirectoryName, "particles", item.RootName + "_" + BoxNetSuffix + ".mrcs");
-                            if (File.Exists(particles)) File.Delete(particles);
-                            int index = Helper.PathToName(item.Name).IndexOf("_fractions");
-                            string microscopeXMLfile = item.DirectoryName + "microscopeXMLfiles" + @"\" + Helper.PathToName(item.Name).Substring(0, index) + ".xml";
-                            try
-                            {
-                                File.Move(microscopeXMLfile, Path.Combine(path, "Trash", Helper.PathToName(item.Name).Substring(0, index) + ".xml"));
-                            }
-                            catch { }
+                            File.Move(item.Path, Path.Combine(path, "Trash", item.Name));
                         }
+                        catch { };
+                        if (!TryDelete(item.XMLPath)) { failedtodelete.Add(item.XMLPath); }
+                        if (!TryDelete(item.AveragePath)) { failedtodelete.Add(item.AveragePath); }
+                        if (!TryDelete(item.DeconvolvedPath)) { failedtodelete.Add(item.DeconvolvedPath); }
+                        if (!TryDelete(item.ThumbnailsPath)) { failedtodelete.Add(item.ThumbnailsPath); }
+                        string m = Path.Combine(item.MatchingDir, item.RootName + ".star");
+                        if (!TryDelete(m)) { failedtodelete.Add(m); }
+                        if (!TryDelete(item.PowerSpectrumPath)) { failedtodelete.Add(item.PowerSpectrumPath); }
+                        if (!TryDelete(item.MaskPath)) { failedtodelete.Add(item.MaskPath); }
+                        string BoxNetSuffix = Helper.PathToNameWithExtension(Options.Picking.ModelPath);
+                        string particles = Path.Combine(item.DirectoryName, "particles", item.RootName + "_" + BoxNetSuffix + ".mrcs");
+                        if (!TryDelete(particles)) { failedtodelete.Add(particles); }
+                        int index = Helper.PathToName(item.Name).IndexOf("_fractions");
+                        string microscopeXMLfile = item.DirectoryName + "microscopeXMLfiles" + @"\" + Helper.PathToName(item.Name).Substring(0, index) + ".xml";
+                        try
+                        {
+                            File.Move(microscopeXMLfile, Path.Combine(path, "Trash", Helper.PathToName(item.Name).Substring(0, index) + ".xml"));
+                        }
+                        catch { }
                     }
-                    AdjustInput();
                 }
-                this.HideMetroDialogAsync(Dialog);
+
+                if (failedtodelete.Count > 0)
+                {
+                    string messageBoxText = String.Join("\n", failedtodelete.ToArray());
+                    string caption = "Failed to delete some files";
+                    await this.ShowMessageAsync(caption, messageBoxText);
+                }
+                AdjustInput();
+                await this.HideMetroDialogAsync(Dialog);
             };
 
             Dialog.Content = DialogContent;
             this.ShowMetroDialogAsync(Dialog);
+        }
+
+        public bool TryDelete(string file)
+        {
+            if (File.Exists(file))
+            {
+                try
+                {
+                    File.Delete(file);
+                } catch (Exception ex)
+                {
+                    return false;
+                }
+                return true;
+            }
+            return false;
         }
 
         public void LogToFile(string s)

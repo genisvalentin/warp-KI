@@ -151,7 +151,19 @@ namespace Warp
 
         public bool SuccessfullyReadXmlProperties = false;
 
-        public bool IsInitialized { get; set; } = false;
+        private bool isInitialized = false;
+        public bool IsInitialized
+        {
+            get => isInitialized;
+            set
+            {
+                isInitialized = value;
+                if (isInitialized)
+                {
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsInitialized)));
+                }
+            }
+        }
 
         private string mdocFile;
         public string MdocFile
@@ -465,7 +477,7 @@ namespace Warp
 
         public void CheckFilesExist()
         {
-            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, Settings.LinuxPath);
+            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, Settings.LinuxPath, Settings.AretomoVersion);
 
             if (File.Exists(files.InStack))
             {
@@ -612,7 +624,7 @@ namespace Warp
 
         public bool UpdateTiltStatus(Movie Movie, Controls.ProcessingStatus Status)
         {
-            var match = TiltImages.Where(ti => Path.GetFileName(ti.Value.SubFramePath) == Movie.Name).ToList();
+            var match = TiltImages.Where(ti => Path.GetFileName(ti.Value.SubFramePath).ToLower() == Movie.Name.ToLower()).ToList();
             if (match.Count == 0) return false;
 
             match.ForEach(ti => ti.Value.Status = Status);
@@ -642,7 +654,7 @@ namespace Warp
             IsNotProcessing = false;
 
             if (!OverrideGlobalSettings) { CopyGlobalSettings(); }
-            var files = TiltSeriesProcessor.ProcessingFiles(this.MdocFile, Settings.LinuxPath);
+            var files = TiltSeriesProcessor.ProcessingFiles(this.MdocFile, Settings.LinuxPath, Settings.AretomoVersion);
 
             if (File.Exists(files.LogFile))
             {
@@ -734,7 +746,7 @@ namespace Warp
         #region Icommands
         public void CopyTomoToClipboard(object param)
         {
-            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, Settings.LinuxPath);
+            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, Settings.LinuxPath, Settings.AretomoVersion);
             if (File.Exists(files.OutTomoDenoised))
             {
                 Clipboard.SetText(files.OutTomoDenoised);
@@ -770,7 +782,7 @@ namespace Warp
 
         public void OpenLog(object param)
         {
-            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, Settings.LinuxPath);
+            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, Settings.LinuxPath, Settings.AretomoVersion);
             if (File.Exists(files.LogFile))
             {
                 System.Diagnostics.Process.Start(files.LogFile);
@@ -779,7 +791,7 @@ namespace Warp
 
         public void OpenStMovie(object param)
         {
-            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, Settings.LinuxPath);
+            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, Settings.LinuxPath, Settings.AretomoVersion);
             if (File.Exists(files.AretomoOutStMov))
             {
                 System.Diagnostics.Process.Start(files.AretomoOutStMov);
@@ -788,7 +800,7 @@ namespace Warp
 
         public void OpenTomoMovie(object param)
         {
-            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, Settings.LinuxPath);
+            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, Settings.LinuxPath, Settings.AretomoVersion);
             if (File.Exists(files.AretomoOutTomogramMov))
             {
                 System.Diagnostics.Process.Start(files.AretomoOutTomogramMov);
@@ -797,7 +809,7 @@ namespace Warp
 
         public List<string> ClearSeries()
         {
-            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, "");
+            var files = TiltSeriesProcessor.ProcessingFiles(MdocFile, "", Settings.AretomoVersion);
             if (!IsNotProcessing)
             {
                 CancellationTokenSource.Cancel();

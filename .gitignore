@@ -17,6 +17,7 @@ bld/
 [Oo]bj/
 testdata/
 *.zip
+zipcommand.txt
 
 id_rase_openssh
 

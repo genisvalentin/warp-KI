@@ -355,6 +355,7 @@ namespace Warp
             Coord[] coords;
             int[][] indexes;
             Coord[] centroids;
+            int[] groups;
             var g = OpticsGroupDict.Select((item) => item.Value[3]);
             if (!g.Contains("0"))
             {
@@ -370,7 +371,7 @@ namespace Warp
 
                 var kmeans = new KMeans(k: providedCentroids.Length);
                 kmeans.Centroids = providedCentroids;
-                var groups = kmeans.Clusters.Decide(coords.Select(x => new double[] { x.X, x.Y }).ToArray());
+                groups = kmeans.Clusters.Decide(coords.Select(x => new double[] { x.X, x.Y }).ToArray());
 
                 int counter = 0;
                 if (groups.Length == OpticsGroupDict.Count)
@@ -383,19 +384,11 @@ namespace Warp
                     Console.WriteLine($"Assigned optics group to {counter} micrographs");
                 }
             }
-        }
-
-        public void plotOpticsGroup() {
-
-            var coords = OpticsGroupDict.Select(x => new Coord(double.Parse(x.Value[1]), double.Parse(x.Value[2]))).ToArray();
-            var indexes = OpticGroups.GetCentroidIndexes(coords, v1, v2);
-            var centroids = OpticGroups.GetCentroids(indexes, v1, v2);
-            var groups = OpticsGroupDict.Select(g => int.Parse(g.Value[3])).ToArray();
 
             var distinct_groups = groups.Distinct().ToList();
 
             NOpticsGroup = indexes.Length;
-       
+
             var plt = new ScottPlot.Plot(400, 300);
             int counter2 = 0;
 
@@ -447,9 +440,6 @@ namespace Warp
             if (!OpticsGroupDict.ContainsKey(movieName))
             {
                 if (!ImportXMLfile(movieName)) return "0";
-            } else if (OpticsGroupDict[movieName][3] == "0")
-            {
-                if (!ImportXMLfile(movieName)) return "0";
             }
             return OpticsGroupDict[movieName][3];
         }
@@ -457,13 +447,19 @@ namespace Warp
         public void UpdateXmlFileList(string CurrentXMLFolder)
         {
             Console.WriteLine("Update XML file list");
-            var groups = OpticsGroupDict.Select((item) => item.Value[3]);
-            if (!groups.Contains("0"))
+            int NMovies = 0;
+            //int nunprocessed=0;
+            Application.Current.Dispatcher.Invoke(() => {
+                var mw = (MainWindow)Application.Current.MainWindow;
+                NMovies = mw.FileDiscoverer.GetImmutableFiles().Length;
+            });
+
+            if (OpticsGroupDict.Count == NMovies)
             {
-                Console.WriteLine("All microgrhaphs have an optics group");
+                Console.WriteLine("All micrographs have an optics group");
                 return;
             }
-            Console.WriteLine("Groups contains 0");
+
             try
             {
                 XMLfiles = Directory.GetFiles(CurrentXMLFolder, "*.xml", SearchOption.AllDirectories);
@@ -477,7 +473,6 @@ namespace Warp
             {
                 LogToFile("Listed " + XMLfiles.Count() + " XML files.");
             }
-            plotOpticsGroup();
         }
 
         private bool ImportXMLfile(string FrameName) {
@@ -524,15 +519,11 @@ namespace Warp
                             OpticsGroupDict.Add(FrameName, metadata);
                         }
                     }
-                    else
-                    {
-                        OpticsGroupDict[FrameName] = metadata;
-                    }
                     return true;
                 }
-                return false;
             }
-            else
+            return false;
+            /*else
             {
                 if (!OpticsGroupDict.ContainsKey(FrameName))
                 {
@@ -544,7 +535,7 @@ namespace Warp
                 }
                 return false;
                 //LogToFile(XMLfile + ".xml was not found.");
-            }
+            }*/
         }
 
         private List<string> GetMovieMetadata(string XMLfile)  {
@@ -586,16 +577,13 @@ namespace Warp
 
         public DateTime GetAcquisitionDt(string movieName)
         {
-            lock (OpticsGroupDict)
+            if (OpticsGroupDict.ContainsKey(movieName))
             {
-                if (OpticsGroupDict.ContainsKey(movieName))
-                {
-                    return (DateTime.Parse(OpticsGroupDict[movieName][0]));
-                }
-                else
-                {
-                    return (DateTime.Now);
-                }
+                return (DateTime.Parse(OpticsGroupDict[movieName][0]));
+            }
+            else
+            {
+                return (DateTime.Now);
             }
         }
 
@@ -624,7 +612,8 @@ namespace Warp
         private Task[] TaskArray = new Task[5];
         private EPUSession session;
         public FileSystemWatcher FileWatcher;
-        private bool NeedsRelaunchClass = false;
+        public bool NeedsRelaunchClass = false;
+        public bool NeedsCreateInputStar = false;
         private Dictionary<string, int[]> directoryIsActiveDict = new Dictionary<string, int[]>();
 
         public delegate void ProcessingEventHandler(object sender, RoutedEventArgs e);
@@ -768,7 +757,7 @@ namespace Warp
 
         public bool NeedsNewOpticsGroup { get; set; } = false;
 
-        public void SessionLoop(CancellationToken cancellationToken)
+        public async void SessionLoop(CancellationToken cancellationToken)
         {
             LogToFile("EPU session manager loop");
             Console.WriteLine("EPU session manager loop");
@@ -841,23 +830,19 @@ namespace Warp
                         continue;
                     }
 
-                    /*
-                    if (Options.Picking.WriteOpticGroups && session.NOpticsGroup > 0)
-                    {
-                        TaskArray[i] = Task.Run(() =>
-                        {
-                            session.UpdateOpticsGroup();
-                            PopulateOpticsGroupTable(biggestShift + session.NOpticsGroup);
-                        }).ContinueWith(_ =>
-                        {
-                            AggregateException ex = _.Exception;
-                            LogToFile($"UpdateOpticsGroup task exception {ex.GetType().Name}: {ex.Message}");
-                        }, TaskContinuationOptions.OnlyOnFaulted);
-                    }
-                    */
-
                     canaddopticgroups = session.NOpticsGroup > 0;
                     NOpticsGroup = session.NOpticsGroup;
+
+                    if (canaddopticgroups)
+                    {
+                        PopulateOpticsGroupTable(biggestShift + NOpticsGroup);
+                        TaskArray[i] = Task.Run(session.UpdateOpticsGroup).ContinueWith(_ =>
+                        {
+                            AggregateException ex = _.Exception;
+                            LogToFile($"EstimateNOpticGroups task exception {ex.GetType().Name}: {ex.Message}");
+                        }, TaskContinuationOptions.OnlyOnFaulted);
+                        continue;
+                    }
 
                     continue;
                 }
@@ -947,6 +932,7 @@ namespace Warp
 
                         if (NeedsRelaunchClass)
                         {
+                            NeedsCreateInputStar = true;
                             LastNGoodParticles = NGoodParticles;
                             LogToFile("Launch classification");
                             latestClassLaunchTime = DateTime.Now;
@@ -962,10 +948,13 @@ namespace Warp
                             string BoxNetSuffix = Helper.PathToNameWithExtension(Options.Picking.ModelPath);
                             string particle_meta_path = Path.Combine(Options.Import.Folder, "goodparticles_cryosparc_input.star");
                             if (File.Exists(particle_meta_path)) File.Delete(particle_meta_path);
-                            if (File.Exists(Path.Combine(Options.Import.Folder, $"goodparticles_{BoxNetSuffix}.star")))
                             {
-                                File.Copy(Path.Combine(Options.Import.Folder, $"goodparticles_{BoxNetSuffix}.star"), particle_meta_path);
-                                TaskArray[i] = Task.Run(() => cryosparcclient.Run(sessionInfo, cancellationToken)).ContinueWith(_ =>
+                                TaskArray[i] = Task.Run( async () => {
+                                    while (!File.Exists(particle_meta_path)) Thread.Sleep(1000);
+                                    NeedsCreateInputStar = false;
+                                    await cryosparcclient.Run(sessionInfo, cancellationToken);
+                                    }
+                                ).ContinueWith(_ =>
                                 {
                                     AggregateException ex = _.Exception;
                                     LogToFile($"ClassificationTask task exception {ex.GetType().Name}: {ex.Message}");
@@ -1034,12 +1023,6 @@ namespace Warp
 
         }
 
-        public void UpdateOpticsGroup() 
-        {
-            PopulateOpticsGroupTable(biggestShift + NOpticsGroup);
-            session.UpdateOpticsGroup();
-        }
-
         private cryosparcClient.SessionInfo OptionsToSessionInfo(string sessionName)
         {
             cryosparcClient.SessionInfo session = new cryosparcClient.SessionInfo();
@@ -1090,6 +1073,7 @@ namespace Warp
             session.CryosparcProject = Options.Classification.CryosparcProject;
             session.CryosparcProjectName = Options.Classification.CryosparcProjectName;
             session.CryosparcProjectDir = Options.Classification.CryosparcProjectDir;
+            session.particle_meta_path_windows = Path.Combine(Options.Import.Folder, "goodparticles_cryosparc_input.star");
             return (session); 
         } 
 
@@ -1114,9 +1098,6 @@ namespace Warp
             if (Options.Stacker.GridScreening && !Directory.Exists(folder)) return;
             if (Options.Stacker.GridScreening && !directoryIsActiveDict.ContainsKey(folder)) return;
             if (directoryIsActiveDict[folder][1] == 0) return;
-
-            //tokenSource.Cancel();
-            //tokenSource.Dispose();
 
             if (active && !Waiting) { 
                 SessionSwitchIndicator = true;

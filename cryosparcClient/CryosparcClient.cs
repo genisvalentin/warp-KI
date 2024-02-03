@@ -158,6 +158,7 @@ namespace cryosparcClient
         public string CryosparcProject;
         public string CryosparcProjectName;
         public string CryosparcProjectDir;
+        public string particle_meta_path_windows = "";
     }
 
     public class STATUS
@@ -1136,6 +1137,14 @@ namespace cryosparcClient
             }
 
             lastJobStatus = await doImportParticles(protocol, session, token);
+            try
+            {
+                File.Delete(session.particle_meta_path_windows);
+            }catch (Exception ex)
+            {
+
+            }
+
             if (lastJobStatus != STATUS.STATUS_COMPLETED)
             {
                 protocol.Status = "Classification failed!";

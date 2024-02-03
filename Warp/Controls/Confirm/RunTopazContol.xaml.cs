@@ -144,7 +144,7 @@ namespace Warp.Controls
                 var reconstructedTs = TiltSeries.TiltSeriesList.Where(x => File.Exists(x.OutTomo) && !File.Exists(x.OutTomoDenoised));
                 foreach (var ts in reconstructedTs)
                 {
-                    var files = TiltSeriesProcessor.ProcessingFiles(ts.MdocFile, SshSettings.LinuxPath);
+                    var files = TiltSeriesProcessor.ProcessingFiles(ts.MdocFile, SshSettings.LinuxPath, SshSettings.AretomoVersion);
                     ts.OutTomoLinux = files.OutTomoLinux;
                 }
                 var tomograms = String.Join(" ", reconstructedTs.Select(x => x.OutTomoLinux).ToList());
@@ -212,7 +212,7 @@ namespace Warp.Controls
             string baseName = Path.GetFileNameWithoutExtension(ts.MdocFile);
             string LinuxPath = SshSettings.LinuxPath.TrimEnd('/') + "/topaz";
 
-            var files = TiltSeriesProcessor.ProcessingFiles(ts.MdocFile, SshSettings.LinuxPath);
+            var files = TiltSeriesProcessor.ProcessingFiles(ts.MdocFile, SshSettings.LinuxPath, SshSettings.AretomoVersion);
 
             var cmd = $"mrc2tif -j -a 0,0 {files.OutTomoDenoisedLinux} {LinuxPath}/{baseName}; ";
             cmd += $"ffmpeg -y -i {LinuxPath}/{baseName}.%0{nslices}d.jpg -pix_fmt yuv420p -s 452x640 {files.AretomoOutTomogramMovLinux}; rm {LinuxPath}/{baseName}.*.jpg; ";

@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -38,16 +39,22 @@ namespace Warp
         public string OutPngLinux { get; set; }
         public string OutPngXZLinux { get; set; }
         public string ImodDir { get; set; }
+
         public string AretomoDir { get; set; }
         public string AretomoSettingsXml { get; set; }
         public string AretomoOutXf { get; set; }
+
         public string AretomoOutXfLinux { get; set; }
+
 
         public string AretomoOutTlt { get; set; }
 
+
         public string AretomoOutSt { get; set; }
 
+
         public string AretomoOutStLinux { get; set; }
+
 
         public string AretomoOutStMov { get; set; }
         public string AretomoOutStMovLinux { get; set; }
@@ -60,7 +67,7 @@ namespace Warp
 
     public class TiltSeriesProcessor
     {
-        public static ProcessingFiles ProcessingFiles(string mdoc_file, string linuxPath)
+        public static ProcessingFiles ProcessingFiles(string mdoc_file, string linuxPath, int version=1)
         {
             var files = new ProcessingFiles();
             var baseDir = Path.GetDirectoryName(mdoc_file);
@@ -116,6 +123,15 @@ namespace Warp
             files.AretomoOutTomogramMovLinux = String.Join("/", linuxPath, "aretomo", baseName, String.Format("{0}.mp4", baseName));
             files.AretomoOutXfLinux = String.Join("/", linuxPath, "aretomo", baseName, String.Format("{0}.xf", baseName));
 
+            if (version == 2)
+            {
+                files.AretomoOutXfLinux = String.Join("/", linuxPath, "aretomo", baseName, String.Format("{0}_Newstack_st.xf", baseName));
+                files.AretomoOutStLinux = String.Join("/", linuxPath, "aretomo", baseName, String.Format("{0}_Newstack_st.mrc", baseName));
+                files.AretomoOutXf = Path.Combine(baseDir, "aretomo", baseName, String.Format("{0}_Newstack_st.xf", baseName));
+                files.AretomoOutTlt = Path.Combine(baseDir, "aretomo", baseName, String.Format("{0}_Newstack_st.tlt", baseName));
+                files.AretomoOutSt = Path.Combine(baseDir, "aretomo", baseName, String.Format("{0}_Newstack_st.mrc", baseName));
+                files.ImodDir = Path.Combine(baseDir, "aretomo", baseName, String.Format("{0}_Newstack_Imod", baseName));
+            }
             return files;
         }
 
@@ -138,7 +154,7 @@ namespace Warp
         {
             if (!File.Exists(ts.MdocFile)) { return jobStatus.Failed; }
 
-            var files = ProcessingFiles(ts.MdocFile, settings.LinuxPath);
+            var files = ProcessingFiles(ts.MdocFile, settings.LinuxPath, settings.AretomoVersion);
 
             string baseDir = Path.GetDirectoryName(ts.MdocFile);
             string baseName = Path.GetFileNameWithoutExtension(ts.MdocFile);
@@ -202,7 +218,7 @@ namespace Warp
         {
             bool exists = false;
             LookupFile = LookupFile.Trim().TrimEnd('/');
-            string cmd = $"if [ -f {LookupFile} ]; then echo YES; fi; echo DONE";
+            string cmd = $"echo ''; if [ -f {LookupFile} ]; then echo YES; fi; echo DONE";
             LogToFile("Checking file exists by ssh...");
             LogToFile(cmd);
             try
@@ -236,7 +252,7 @@ namespace Warp
             string baseName = Path.GetFileNameWithoutExtension(ts.MdocFile);
             //if (baseDir == null || baseName == null) { return jobStatus.Failed; }
 
-            var files = ProcessingFiles(ts.MdocFile, settings.LinuxPath);
+            var files = ProcessingFiles(ts.MdocFile, settings.LinuxPath, settings.AretomoVersion);
 
             if (!WriteAretomoAlnFile(ts, files.AngFile, aretomoSettings)) { return jobStatus.Failed; }
 
@@ -387,7 +403,7 @@ namespace Warp
 
         public static int StackNImages(TiltSeriesViewModel ts, OptionsSshSettings settings, string file)
         {
-            var files = ProcessingFiles(ts.MdocFile, settings.LinuxPath);
+            var files = ProcessingFiles(ts.MdocFile, settings.LinuxPath, settings.AretomoVersion);
             string NImages = "";
             int NImagesInt = 0;
             string cmd = $"source $HOME/.bashrc; source_eman2; e2iminfo.py {file}; echo DONE";
@@ -439,7 +455,7 @@ namespace Warp
             }
             string LinuxPath = settings.LinuxPath.TrimEnd('/') + "/aretomo/" + baseName;
 
-            var files = ProcessingFiles(ts.MdocFile, settings.LinuxPath);
+            var files = ProcessingFiles(ts.MdocFile, settings.LinuxPath, settings.AretomoVersion);
 
             var tomo = File.Exists(files.OutTomoDenoised) ? files.OutTomoDenoisedLinux : files.OutTomoLinux;
             if (!File.Exists(files.Projection)) { 
@@ -570,20 +586,27 @@ namespace Warp
             //Sometimes we need to wait some time until the outpng file is available
             //Maybe it's slower on network filesystems
             int c = 0;
-            var OutPngSlice = files.OutPng + $".{centralSlice}.png";
+            var OutPngSlice = Directory.EnumerateFiles(files.AretomoDir).Where(file => IsProjXY(file, ts.Name)).FirstOrDefault();
             while (!File.Exists(OutPngSlice))
             {
                 Thread.Sleep(1000);
                 c++;
                 if (c > 5)
                 {
-                    LogToFile($"Could not find aretomo2png outpng {files.OutPng}");
+                    LogToFile($"Could not find aretomo2png outpng {OutPngSlice}");
                     return jobStatus.Failed;
                 }
             }
 
             File.Move(OutPngSlice, files.OutPng);
             return jobStatus.Finished;
+        }
+
+        static bool IsProjXY(string fileName, string tsName)
+        {
+            // Use a regular expression to check for a three-digit number in the file name
+            Regex regex = new Regex(tsName+"_projXY.png."+@"\d+"+".png");
+            return regex.IsMatch(fileName);
         }
 
         internal static jobStatus Denoise(string topazEnv, string linuxPath, string tomogram, string LogFile, int Device, OptionsSshSettings settings, CancellationToken Token, TiltSeriesViewModel ts)

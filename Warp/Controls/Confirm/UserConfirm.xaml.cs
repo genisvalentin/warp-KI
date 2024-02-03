@@ -29,6 +29,7 @@ namespace Warp.Controls
         public bool Confirm;
         public Options Options;
         public event Action Close;
+        public event Action DeleteAndClose;
         public event PropertyChangedEventHandler PropertyChanged;
 
         private string _Info = "Info message";

@@ -2959,6 +2959,18 @@ namespace Warp
             }
         }
 
+        private int _aretomoVersion = 1;
+        [WarpSerializable]
+        [JsonProperty]
+        public int AretomoVersion
+        {
+            get => _aretomoVersion;
+            private set
+            {
+                if (value != _aretomoVersion) { _aretomoVersion = value; OnPropertyChanged(); }
+            }
+        }
+
         private string _topazEnv;
         [WarpSerializable]
         [JsonProperty]
@@ -2984,7 +2996,7 @@ namespace Warp
                     sshclient.Connect();
                     using (var stream = sshclient.CreateShellStream("xterm", 80, 50, 1024, 1024, 1024))
                     {
-                        var cmd = String.Format("if [[ -d '{0}' ]];then echo YES;fi; echo NO", LinuxPath);
+                        var cmd = String.Format("echo ''; if [[ -d '{0}' ]];then echo YES;fi; echo NO", LinuxPath);
                         stream.WriteLine(cmd);
                         while (stream.CanRead)
                         {
@@ -3000,6 +3012,30 @@ namespace Warp
                                 LinuxServerOk = false;
                                 Auto = false;
                                 break;
+                            }
+                        }
+                        if (LinuxServerOk)
+                        {
+                            stream.WriteLine("echo ''; aretomo --version;echo DONE");
+                            while (stream.CanRead)
+                            {
+                                var line = stream.ReadLine();
+                                Console.WriteLine(line);
+                                if (line.StartsWith("AreTomo "))
+                                {
+                                    AretomoVersion = 1;
+                                    break;
+                                }
+                                if (line.StartsWith("AreTomo2"))
+                                {
+                                    AretomoVersion = 2;
+                                    break;
+                                }
+                                if (line == "DONE")
+                                {
+                                    LinuxServerOk = false;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -3278,6 +3314,9 @@ namespace Warp
     {
         public event PropertyChangedEventHandler PropertyChanged;
 
+        public event PropertyChangedEventHandler TiltSeriesInitialized;
+
+
         public List<TiltSeriesViewModel> TiltSeriesProcessQueue = new List<TiltSeriesViewModel>();
 
         private Dictionary<int,List<Task>> RunningProcesses = new Dictionary<int, List<Task>>();
@@ -3515,6 +3554,10 @@ namespace Warp
                         }
                     }
                 }
+            }
+            else if (e.PropertyName == "IsInitialized")
+            {
+                TiltSeriesInitialized?.Invoke(this, new PropertyChangedEventArgs(ts.Name));
             }
         }
     }

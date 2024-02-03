@@ -9,9 +9,13 @@
     <StackPanel Orientation="Vertical" HorizontalAlignment="Center">
         <TextBlock Name="DialogText" Text="Clear Tilt Series?" FontSize="24" Margin="0,20" />
         <Label Name="InfoLabel" Content="" HorizontalAlignment="Center"/>
-        <StackPanel Name="PanelButtons" Orientation="Horizontal" HorizontalAlignment="Center" Height="50" Margin="0,0,0,20">
-            <Button Name="ButtonConfirm" Content="Confirm" FontSize="20" FontWeight="Medium" Foreground="CornflowerBlue" Margin="0,0,0,0" VerticalAlignment="Bottom" Style="{StaticResource ChromelessButtonStyle}" Click="ButtonConfirm_OnClick" />
-            <Button Name="ButtonCancel" Content="Cancel" FontSize="20" FontWeight="Medium" Foreground="CornflowerBlue" Margin="24,0,0,0" VerticalAlignment="Bottom" Style="{StaticResource ChromelessButtonStyle}" Click="ButtonCancel_OnClick" />
-        </StackPanel>
+        <Grid HorizontalAlignment="Center">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" MinWidth="100"/>
+                <ColumnDefinition Width="Auto" MinWidth="100"/>
+            </Grid.ColumnDefinitions>
+            <Button Grid.Column="0" Name="ButtonConfirm" Content="Confirm" FontSize="20" FontWeight="Medium" Foreground="CornflowerBlue" Margin="0,0,0,0" VerticalAlignment="Bottom" Style="{StaticResource ChromelessButtonStyle}" Click="ButtonConfirm_OnClick" />
+            <Button Grid.Column="1" Name="ButtonCancel" Content="Cancel" FontSize="20" FontWeight="Medium" Foreground="CornflowerBlue" Margin="24,0,0,0" VerticalAlignment="Bottom" Style="{StaticResource ChromelessButtonStyle}" Click="ButtonCancel_OnClick" />
+        </Grid>
     </StackPanel>
 </UserControl>
