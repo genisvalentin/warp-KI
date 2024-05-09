@@ -503,12 +503,6 @@ namespace Warp
             }
 
             if (File.Exists(files.AretomoOutSt)) {
-                //var NImages = StackNImages(ts, settings, files.AretomoOutStLinux);
-                //NImages -= 1;
-                //if (NImages > 0)
-                //{
-                    //cmd = $"source $HOME/.bashrc;source_eman2;e2proc2d.py --fixintscaling sane --process filter.lowpass.gauss:cutoff_freq=0.1 {files.AretomoOutStLinux} {LinuxPath}/e2_st_{baseName}.png --unstacking;"; //Generate png files
-                    //cmd = $"for i in {{0..{NImages}}}; do newstack -xform {files.AretomoOutXfLinux} -in {files.AretomoOutStLinux} -float 1 -fo jpeg -mo 0 -ro {ts.AretomoRefinedTiltAxis} -secs $i -out {LinuxPath}/{baseName}-$i.jpeg; done; ";
                     cmd = $"newstack -xform {files.AretomoOutXfLinux} -in {files.AretomoOutStLinux} -float 2 -fo mrc -mo 0 -ro {ts.AretomoRefinedTiltAxis} -out {LinuxPath}/{baseName}_aln_st.mrc; ";
                     cmd += $"mrc2tif -j -a 0,0 {LinuxPath}/{baseName}_aln_st.mrc {LinuxPath}/{baseName}_aln_st; ";
                     cmd += $"ffmpeg -y -i {LinuxPath}/{baseName}_aln_st.%3d.jpg -pix_fmt yuv420p -s 640x452 -filter_complex '[0]reverse[r]; [0][r] concat,loop = 0:40,setpts = N / 25 / TB' {files.AretomoOutStMovLinux}; rm {LinuxPath}/{baseName}_aln_st.*.jpg; "; // rm {LinuxPath}/{baseName}-*.jpeg; "; //Run ffmpeg
@@ -542,8 +536,6 @@ namespace Warp
                         LogToFile(ex.Message);
                         return jobStatus.Failed;
                     }
-                //}
-
             }
 
             if (File.Exists(files.OutTomoDenoised) || File.Exists(files.OutTomo)) {
@@ -590,12 +582,13 @@ namespace Warp
             while (!File.Exists(OutPngSlice))
             {
                 Thread.Sleep(1000);
-                c++;
-                if (c > 5)
+                OutPngSlice = Directory.EnumerateFiles(files.AretomoDir).Where(file => IsProjXY(file, ts.Name)).FirstOrDefault();
+                if (c > 4)
                 {
                     LogToFile($"Could not find aretomo2png outpng {OutPngSlice}");
                     return jobStatus.Failed;
                 }
+                c++;
             }
 
             File.Move(OutPngSlice, files.OutPng);
@@ -611,7 +604,6 @@ namespace Warp
 
         internal static jobStatus Denoise(string topazEnv, string linuxPath, string tomogram, string LogFile, int Device, OptionsSshSettings settings, CancellationToken Token, TiltSeriesViewModel ts)
         {
-            
             var cmd = "source ~/.bashrc; ";
             cmd += $"conda activate {topazEnv}; ";
             cmd += $"cd {linuxPath}; ";
@@ -704,13 +696,21 @@ namespace Warp
             if (IncludeAll)
             {
                 NImages = ts.TiltImages.Count;
-                writeLines = ts.TiltImages.Select(image => String.Join("/", settings.LinuxPath, "average", Path.GetFileNameWithoutExtension(image.Value.SubFramePath)+".mrc")).ToArray();
+                writeLines = ts.TiltImages.Select( image => {
+                    var n = Path.GetFileNameWithoutExtension(image.Value.SubFramePath);
+                    return String.Join("/", settings.LinuxPath, "average", n.Substring(0, n.Length - 9) + "fractions.mrc");
+                }
+                ).ToArray();
             }
             else
             {
                 var InputImages = ts.TiltImages.Where(image => image.Value.Status == Controls.ProcessingStatus.Processed);
                 NImages= InputImages.Count();
-                writeLines = InputImages.Select(image => String.Join("/", settings.LinuxPath, "average", Path.GetFileNameWithoutExtension(image.Value.SubFramePath)+".mrc")).ToArray();
+                writeLines = InputImages.Select( image => {
+                    var n = Path.GetFileNameWithoutExtension(image.Value.SubFramePath);
+                    return String.Join("/", settings.LinuxPath, "average", n.Substring(0, n.Length - 9) + "fractions.mrc");
+                    }
+                ).ToArray();
             }
 
             try

@@ -19,6 +19,7 @@ using Accord.MachineLearning;
 using System.Drawing;
 using Color = System.Drawing.Color;
 using System.Diagnostics;
+using System.Globalization;
 
 namespace Warp
 {
@@ -33,7 +34,7 @@ namespace Warp
         private const string DefaultGlobalOptionsName = "global.settings";
         private readonly GlobalOptions GlobalOptions;
         private static readonly HttpClient client = new HttpClient();
-        private Dictionary<string,List<string>> OpticsGroupDict = new Dictionary<string, List<string>>();
+        public Dictionary<string,List<string>> OpticsGroupDict = new Dictionary<string, List<string>>();
         private DateTime oldestMicrographDt;
         private string[] XMLfiles = Array.Empty<string>();
         private Coord[] OpticGroupsCentroids;
@@ -350,6 +351,7 @@ namespace Warp
             plt.SaveFig(Path.GetFullPath(Options.Import.Folder).TrimEnd(Path.DirectorySeparatorChar) + @"\opticsGroups.png");
         }
 
+        public bool OpticsGroupsComplete = false;
         public void UpdateOpticsGroup()
         {
             Coord[] coords;
@@ -359,7 +361,11 @@ namespace Warp
             var g = OpticsGroupDict.Select((item) => item.Value[3]);
             if (!g.Contains("0"))
             {
+                OpticsGroupsComplete = true;
                 return;
+            } else
+            {
+                OpticsGroupsComplete = false;
             }
 
             lock (OpticsGroupDict)
@@ -444,6 +450,13 @@ namespace Warp
             return OpticsGroupDict[movieName][3];
         }
 
+        public float2 GetBeamTilt (string movieName)
+        {
+            var val = new List<string>() { "0", "0", "0", "0" };
+            OpticsGroupDict.TryGetValue(movieName, out val);
+            return new float2 (float.Parse(val[1],CultureInfo.InvariantCulture), float.Parse(val[2], CultureInfo.InvariantCulture));
+        }
+
         public void UpdateXmlFileList(string CurrentXMLFolder)
         {
             Console.WriteLine("Update XML file list");
@@ -523,19 +536,6 @@ namespace Warp
                 }
             }
             return false;
-            /*else
-            {
-                if (!OpticsGroupDict.ContainsKey(FrameName))
-                {
-                    List<string> metadata = new List<string>() { "0", "0", "0", "0" };
-                    lock (OpticsGroupDict)
-                    {
-                        OpticsGroupDict.Add(FrameName, metadata);
-                    }
-                }
-                return false;
-                //LogToFile(XMLfile + ".xml was not found.");
-            }*/
         }
 
         private List<string> GetMovieMetadata(string XMLfile)  {
@@ -735,30 +735,37 @@ namespace Warp
         {
             OpticsGroupTable = new Star(new string[] { });
 
-            if (!OpticsGroupTable.HasColumn("rlnOpticsGroupName"))
-                OpticsGroupTable.AddColumn("rlnOpticsGroupName", "1");
-
-            if (!OpticsGroupTable.HasColumn("rlnOpticsGroup"))
-                OpticsGroupTable.AddColumn("rlnOpticsGroup", "1");
+            OpticsGroupTable.AddColumn("rlnOpticsGroupName", CurrentSessionName+"_0");
+            OpticsGroupTable.AddColumn("rlnOpticsGroup", "0");
 
             List<List<string>> NewRows = new List<List<string>>();
             //We always add a row for optics group 0 in case some micrographs could not be assigned to an optics group.
-            for (int i = 0; i < ( nOpticsGroup +1 ); i++)
+            for (int i = 0; i < ( nOpticsGroup + 1 ); i++)
             {
                 string[] Row = Helper.ArrayOfConstant("0", OpticsGroupTable.ColumnCount);
-                Row[OpticsGroupTable.GetColumnID("rlnOpticsGroupName")] = i.ToString();
+                Row[OpticsGroupTable.GetColumnID("rlnOpticsGroupName")] = CurrentSessionName + "_" + i.ToString();
                 Row[OpticsGroupTable.GetColumnID("rlnOpticsGroup")] = i.ToString();
                 NewRows.Add(Row.ToList());
             }
+
             OpticsGroupTable.AddRow(NewRows);
+            OpticsGroupTable.AddColumn("rlnMicrographPixelSize", Options.Runtime.BinnedPixelSizeMean.ToString());
+            OpticsGroupTable.AddColumn("rlnVoltage", Options.CTF.Voltage.ToString());
+            OpticsGroupTable.AddColumn("rlnSphericalAberration", Options.CTF.Cs.ToString());
+            OpticsGroupTable.AddColumn("rlnAmplitudeContrast", Options.CTF.Amplitude.ToString());
         }
 
         public bool SessionLoopFinished { get; set; } = false;
 
         public bool NeedsNewOpticsGroup { get; set; } = false;
 
-        public async void SessionLoop(CancellationToken cancellationToken)
+        private bool SessionLoopSemaphore { get; set; } = false;
+
+        public async Task SessionLoop(CancellationToken cancellationToken, int task = -1, bool wait = false)
         {
+            if (SessionLoopSemaphore) return;
+            SessionLoopSemaphore = true;
+
             LogToFile("EPU session manager loop");
             Console.WriteLine("EPU session manager loop");
 
@@ -768,11 +775,13 @@ namespace Warp
             //We do nothing if we are still waiting for a Current Stacker Folder
             if (Options.ProcessStacker && Options.Stacker.GridScreening && !Directory.Exists(CurrentStackerFolder))
             {
+                SessionLoopSemaphore = false;
                 return;
             }
 
             for (int i = 0; i < TaskArray.Length; i++)
             {
+                if (task > -1 && task != i ) { continue; }
 
                 if (TaskArray[i] != null)
                 {
@@ -947,25 +956,24 @@ namespace Warp
                             }
                             string BoxNetSuffix = Helper.PathToNameWithExtension(Options.Picking.ModelPath);
                             string particle_meta_path = Path.Combine(Options.Import.Folder, "goodparticles_cryosparc_input.star");
-                            if (File.Exists(particle_meta_path)) File.Delete(particle_meta_path);
+                            
+                            TaskArray[i] = Task.Run( async () => {
+                                if (File.Exists(particle_meta_path)) File.Delete(particle_meta_path);
+                                while (!File.Exists(particle_meta_path)) Thread.Sleep(1000);
+                                NeedsCreateInputStar = false;
+                                await cryosparcclient.Run(sessionInfo, cancellationToken);
+                                }
+                            ).ContinueWith(_ =>
                             {
-                                TaskArray[i] = Task.Run( async () => {
-                                    while (!File.Exists(particle_meta_path)) Thread.Sleep(1000);
-                                    NeedsCreateInputStar = false;
-                                    await cryosparcclient.Run(sessionInfo, cancellationToken);
-                                    }
-                                ).ContinueWith(_ =>
-                                {
-                                    AggregateException ex = _.Exception;
-                                    LogToFile($"ClassificationTask task exception {ex.GetType().Name}: {ex.Message}");
-                                    CurrentClassificationStatus = "Clasification task exception";
-                                    classificationStatus["success"] = "False";
-                                    cryosparcclient.SetClassificationResults(CurrentSessionName, true);
-                                    cryosparcclient.SetClassificationResults(CurrentSessionName, "Clasification task exception");
+                                AggregateException ex = _.Exception;
+                                LogToFile($"ClassificationTask task exception {ex.GetType().Name}: {ex.Message}");
+                                CurrentClassificationStatus = "Clasification task exception";
+                                classificationStatus["success"] = "False";
+                                cryosparcclient.SetClassificationResults(CurrentSessionName, true);
+                                cryosparcclient.SetClassificationResults(CurrentSessionName, "Clasification task exception");
 
-                                }, TaskContinuationOptions.OnlyOnFaulted);
-                                NeedsRelaunchClass = false;
-                            }
+                            }, TaskContinuationOptions.OnlyOnFaulted);
+                            NeedsRelaunchClass = false;
                         }
                     }
                     continue;
@@ -1000,6 +1008,11 @@ namespace Warp
 
             }
 
+            if (wait)
+            {
+                await Task.WhenAll(TaskArray);
+            }
+
             //Update GUI
             Application.Current.Dispatcher.Invoke(() => {
                 Options.Classification.Results = CurrentClassificationStatus;
@@ -1008,6 +1021,13 @@ namespace Warp
                 if (canaddopticgroups)
                 {
                     mw.TextBlockNOpticsGroup.Text = NOpticsGroup.ToString();
+                    if (session.OpticsGroupsComplete) {
+                        mw.TextBlockNOpticsGroupG.Text = " g";
+                    }
+                    else 
+                    {   
+                        mw.TextBlockNOpticsGroupG.Text = " g..."; 
+                    }
                     mw.TextBlockNOpticsGroupG.Visibility = Visibility.Visible;
                     mw.TextBlockNOpticsGroup.Visibility = Visibility.Visible;
                     mw.ButtonOpticGroups.IsEnabled = true;
@@ -1021,6 +1041,7 @@ namespace Warp
                 }
             });
 
+            SessionLoopSemaphore = false;
         }
 
         private cryosparcClient.SessionInfo OptionsToSessionInfo(string sessionName)
@@ -1356,6 +1377,11 @@ namespace Warp
             return (og);
         }
 
+        public float2 GetBeamTilt(string movieName)
+        {
+            return session.GetBeamTilt(movieName);
+        }
+
         private string GetSessionName(string EPUdir)
         {
             string fullPath = Path.GetFullPath(EPUdir).TrimEnd(Path.DirectorySeparatorChar);
@@ -1461,6 +1487,20 @@ namespace Warp
             return Path.GetFullPath(new Uri(path).LocalPath)
                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                        .ToUpperInvariant();
+        }
+
+        public bool IsOpticsGroupsComplete(int count = 0)
+        {
+            var g = session.OpticsGroupDict.Select((item) => item.Value[3]).ToList();
+            count = count == 0 ? g.Count : count;
+            if (!g.Contains("0") && g.Count == count)
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
         }
 
         private static void LogToFile(string s)

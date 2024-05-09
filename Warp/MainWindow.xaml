@@ -17,8 +17,8 @@
                TitlebarHeight="30" 
                FontSize="13" 
                SizeToContent="Manual"
-               GlowBrush="#41b1e1"
-               WindowTitleBrush="#41b1e1"
+               GlowBrush="#304160"
+               WindowTitleBrush="#304160"
                MinWidth="1536"
                MinHeight="760"
                Width="1536"
@@ -231,7 +231,7 @@
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <!--<Button Name="ButtonOpenLog" Content="OPEN LOG" FontSize="14" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" Style="{StaticResource ChromelessButtonStyle}" Click="ButtonOpenLog_OnClick" />-->
                 <Button Name="ButtonUpdateAvailable" Content="UPDATE AVAILABLE" Visibility="Collapsed" FontSize="16" FontWeight="Medium" Foreground="White" Margin="20,0,10,0" VerticalAlignment="Center" Style="{StaticResource ChromelessButtonStyle}" Click="ButtonUpdateAvailable_OnClick" />
-                <Button Name="SwitchDayNight" Content="🔆" FontSize="18" FontWeight="Medium" Foreground="White" Margin="20,0" VerticalAlignment="Center" Style="{StaticResource ChromelessButtonStyle}" Click="SwitchDayNight_OnClick" />
+                <Button Name="SwitchDayNight" Content="🦇" FontSize="18" FontWeight="Medium" Foreground="White" Margin="20,0" VerticalAlignment="Center" Style="{StaticResource ChromelessButtonStyle}" Click="SwitchDayNight_OnClick" />
                 <StackPanel Name="PanelGPUStats" Orientation="Horizontal" VerticalAlignment="Center" />
             </StackPanel>
         </m:WindowCommands>
@@ -494,6 +494,10 @@
                                     <TextBlock Text=" Å, weight with B = " />
                                     <s:ValueSlider Value="{Binding Movement.Bfactor, Mode=TwoWay}" UpdateTrigger="PropertyChanged" TextFormat="{}{0} Å²" MinValue="-10000" MaxValue="0" StepSize="10" />
                                 </StackPanel>
+								<StackPanel Orientation="Horizontal">
+									<CheckBox Name="ExportMotionTracksSwitch" IsChecked="{Binding Movement.ExportMotionTracks}" Content="" FontSize="13" VerticalAlignment="Center" Margin="16,0,0,0"/>
+								    <Label Content="Export motion tracks" FontSize="13"/>
+								</StackPanel>
                             </StackPanel>
                             <Label Name="LabelModelsHeader"  Content="Models" FontSize="18" Margin="0,12,0,0" />
                             <Grid Name="GridOptionsGrids" Margin="6,10,0,0">
@@ -970,8 +974,9 @@
                                     </Button>
                                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                         <Label Content="MdocFilesDirectoryLinux:" VerticalAlignment="Center"/>
-                                        <TextBox Text="{Binding SshSettings.LinuxPath, Mode=TwoWay}" MinWidth="100" MaxWidth="250" MaxHeight="25"/>
-                                        <Button Name="ButtonBrowseLinux" Style="{StaticResource HyperlinkLikeButton}" Click="ButtonBrowseLinux_OnClick" Margin="6,0,6,0" VerticalAlignment="Center">
+                                        <TextBox Name="TextBoxSshSettingsLinuxPath" Text="{Binding SshSettings.LinuxPath, Mode=TwoWay}" MinWidth="100" MaxWidth="250" MaxHeight="25"/>
+										<ProgressBar Name="TestingLinuxServerIndicator" IsIndeterminate="True" Width="50" Height="50" Visibility="Collapsed"/>
+										<Button Name="ButtonBrowseLinux" Style="{StaticResource HyperlinkLikeButton}" Click="ButtonBrowseLinux_OnClick" Margin="6,0,6,0" VerticalAlignment="Center">
                                             <TextBlock Name="ButtonBrowseLinuxText" TextTrimming="CharacterEllipsis" TextAlignment="Left" MaxWidth="100">Browse...</TextBlock>
                                         </Button>
                                     </StackPanel>

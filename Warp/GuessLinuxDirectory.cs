@@ -1,151 +1,22 @@
-﻿using System;
+﻿using Renci.SshNet;
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
 using System.Net;
 using System.Net.Sockets;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
-using System.Security.Policy;
+using System.Reflection.Emit;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
-using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Engines;
-using BenchmarkDotNet.Running;
-using MongoDB.Bson;
-using MongoDB.Driver;
-using Newtonsoft.Json;
-using Renci.SshNet;
-using ScottPlot;
 
-namespace Playground
+namespace Warp
 {
-    public class DictTest
+    internal class GuessLinuxDirectory
     {
-
-        Dictionary<string, List<string>> testdict;
-        int[] groups;
-
-        public DictTest()
-        {
-            testdict = new Dictionary<string, List<string>>();
-            groups = new int[10000];
-            for (int i = 0; i < 10000; i++)
-            {
-                testdict.Add($"movie{i}.tiff", new List<string> { "0", "0", "0", i.ToString() });
-                groups[i] = i;
-            }
-        }
-
-        [Benchmark]
-        public void ForLoop()
-        {
-            int counter = 0;
-            foreach (var mic in testdict)
-            {
-                mic.Value[3] = (groups[counter] + 1).ToString();
-                counter++;
-            }
-        }
-
-        [Benchmark]
-        public void Linq()
-        {
-            testdict = testdict
-            .Zip(groups, (kvp, value) => {
-                kvp.Value[3] = value.ToString();
-                return new KeyValuePair<string, List<string>>(kvp.Key, kvp.Value);
-            }
-            )
-            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-        }
-    }
-
-    public class Program
-    {
-        public static async Task<string[]> GetJobVolumesTest(string projectUid, string jobUid, string host, string license_id)
-        {
-            var pwd = cryosparcClient.Client.GetMongoDbPassword(license_id);
-            var client = new MongoClient("mongodb://cryosparc_user:" + pwd + "@" + host + ":39001");
-            var jobsdb = client.GetDatabase("meteor").GetCollection<BsonDocument>("jobs");
-            var filter = new BsonDocument { { "project_uid", projectUid }, { "uid", jobUid } };
-            var job = await jobsdb.Find(filter).FirstAsync();
-
-            List<string> available_volumes = new List<string>();
-            string output_result_groups_string = job.GetValue("output_result_groups").ToString().ToLower();
-            try
-            {
-                cryosparcClient.CryosparcOutputResultGroup[] output_result_groups =
-                    JsonConvert.DeserializeObject<cryosparcClient.CryosparcOutputResultGroup[]>(output_result_groups_string);
-                foreach (var group in output_result_groups)
-                {
-                    if (group.type == "volume")
-                    {
-                        if (group.contains.First()["type"] == "volume.blob")
-                        available_volumes.Add(group.name);
-                    }
-                }
-                return (available_volumes.ToArray());
-            }
-            catch (Exception e)
-            {
-                return (new string[0]);
-            }
-
-
-        }
-
-        public static async Task<string> GetLatestHeteroRefinementJobTest(string projectUid, string host, string license_id, int nvolumes = 0)
-        {
-            var pwd = cryosparcClient.Client.GetMongoDbPassword(license_id);
-
-            var client = new MongoClient("mongodb://cryosparc_user:" + pwd + "@" + host + ":39001");
-            var jobsdb = client.GetDatabase("meteor").GetCollection<BsonDocument>("jobs");
-            var filter = new BsonDocument { { "project_uid", projectUid }, { "job_type", "hetero_refine" }, { "deleted", false } };
-            var jobsCursor = await jobsdb.FindAsync(filter);
-            var jobsList = await jobsCursor.ToListAsync();
-
-            if (jobsList.Count < 1)
-            {
-                return ("");
-            }
-
-            List<string> uidList = new List<string>();
-            foreach (var job in jobsList)
-            {
-                if (job.GetValue("status") != "completed" && job.GetValue("status") != "running" && job.GetValue("status") != "queued") continue;
-                string id = job.GetValue("uid").ToString();
-                var vols = await GetJobVolumesTest(projectUid, id, host, license_id);
-                if (nvolumes > 0 && nvolumes != vols.Length) continue;
-                uidList.Add(id);
-            }
-            if (uidList.Count < 1)
-            {
-                return ("");
-            }
-
-            uidList.Sort((a, b) => int.Parse(a.Substring(1)).CompareTo(int.Parse(b.Substring(1))));
-
-            return (uidList.Last());
-        }
-
-        /*
-        public static void Main(string[] args)
-        {
-            //var summary = BenchmarkRunner.Run<DictTest>();
-            var t = GetJobVolumesTest("P6", "J61", "3dem-workstation", "56ff1e14-ae24-11ee-900e-5b1af855443b");
-            var r = GetLatestHeteroRefinementJobTest("P6", "3dem-workstation", "56ff1e14-ae24-11ee-900e-5b1af855443b", 5);
-            t.Wait();
-            foreach (var s in t.Result)
-            {
-                Console.WriteLine(s);
-            }
-            r.Wait();
-            Console.WriteLine(r.Result);
-            Console.ReadLine();
-        }*/
-
         public static bool IsMappedNetworkDrive(string driveLetter)
         {
             string hostname = null;
@@ -188,23 +59,28 @@ namespace Playground
             return hostname;
         }
 
-        public static string GetDriveShareName(string driveLetter)
+        public static List<sharedresource> GetDriveShareName(string path)
         {
             //If it is a local drive
             string shareName = null;
+            List<sharedresource> shares = new List<sharedresource>();
             try
             {
-                var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_Share WHERE Path = '" + driveLetter + @"\\'");
+                //var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_Share WHERE Path = '" + driveLetter + @"\\'");
+                var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_Share");
                 foreach (ManagementObject drive in searcher.Get())
                 {
-                    shareName = drive["Name"].ToString();
+                    if (path.StartsWith(drive["path"].ToString())) {
+                        shares.Add(new sharedresource { name = drive["name"].ToString(), path = drive["path"].ToString() });
+                    }
+                    //shareName = drive["Name"].ToString();
                 }
             }
             catch (ManagementException e)
             {
-                return (e.Message);
+                return new List<sharedresource>();
             }
-            return shareName;
+            return shares;
         }
 
         public static string GetHostname(string ipAddress)
@@ -222,7 +98,7 @@ namespace Playground
             }
         }
 
-        public static string GetHostnameOverSsh(string ipAddress)
+        public static string GetHostnameOverSsh(string ipAddress, OptionsSshSettings sshsettings)
         {
             var cmd = $"echo '';echo START;host {ipAddress}; echo DONE";
             var host = default(string);
@@ -231,7 +107,7 @@ namespace Playground
             List<networkvolume> drives = new List<networkvolume>();
             try
             {
-                using (var sshclient = new SshClient("localhost", 22, "genis", "hallbergem3"))
+                using (var sshclient = new SshClient(sshsettings.IP, sshsettings.Port, sshsettings.Username, sshsettings.SshKeyObject))
                 {
                     sshclient.Connect();
                     using (var stream = sshclient.CreateShellStream("xterm", 80, 50, 1024, 1024, 1024))
@@ -247,7 +123,8 @@ namespace Playground
                                 try
                                 {
                                     host = line.Split(' ').Last().Split('.').First();
-                                } catch
+                                }
+                                catch
                                 {
                                     host = ipAddress;
                                 }
@@ -268,10 +145,10 @@ namespace Playground
 
         public static string WindowsToLinux(string winpath, string linuxmountpoint)
         {
-            return linuxmountpoint +  winpath.Substring(2).Replace("\\", "/");
+            return linuxmountpoint + winpath.Substring(2).Replace("\\", "/");
         }
 
-        public static List<networkvolume> GetLinuxNetworkMounts()
+        public static List<networkvolume> GetLinuxNetworkMounts(OptionsSshSettings sshsettings, CancellationToken token)
         {
             var cmd = "echo '';echo START;mount; echo DONE";
 
@@ -279,7 +156,7 @@ namespace Playground
             List<networkvolume> drives = new List<networkvolume>();
             try
             {
-                using (var sshclient = new SshClient("localhost", 22, "genis", "hallbergem3"))
+                using (var sshclient = new SshClient(sshsettings.IP, sshsettings.Port, sshsettings.Username, sshsettings.SshKeyObject))
                 {
                     sshclient.Connect();
                     using (var stream = sshclient.CreateShellStream("xterm", 80, 50, 1024, 1024, 1024))
@@ -287,6 +164,11 @@ namespace Playground
                         stream.WriteLine(cmd);
                         while (stream.CanRead)
                         {
+                            if (token.IsCancellationRequested)
+                            {
+                                Console.WriteLine("Cancellation requested");
+                                break;
+                            }
                             var line = stream.ReadLine();
                             if (line == "START") { parse = true; }
                             if (parse)
@@ -305,8 +187,10 @@ namespace Playground
                                             v.name = s[0].Split(':')[1].TrimStart('/');
                                             v.mountpoint = s[2];
                                             drives.Add(v);
-                                        } catch { };
-                                    } else if (line.Split(' ')[4].StartsWith("cifs"))
+                                        }
+                                        catch { };
+                                    }
+                                    else if (line.Split(' ')[4].StartsWith("cifs"))
                                     {
                                         try
                                         {
@@ -337,8 +221,9 @@ namespace Playground
             {
                 if (IsIPAddress(d.host))
                 {
-                    d.host = GetHostnameOverSsh(d.host);
-                } else
+                    d.host = GetHostnameOverSsh(d.host, sshsettings);
+                }
+                else
                 {
                     d.host = d.host.Split('.')[0];
                 }
@@ -360,44 +245,117 @@ namespace Playground
             return false;
         }
 
-        public static void Main(string[] args)
+        public static string GuessLinuxDirectoryFromPath(string importFolder, OptionsSshSettings sshsettings, CancellationToken token)
         {
-            string importfolder = "T:\\valfur_20240422_142548_96_grid4\\WARP";
-            string drive = importfolder.Substring(0, 2);
-            var d = new networkvolume();
+            if (importFolder.Length < 2) return null;
+            string drive = importFolder.Substring(0,2);
+
+            //var d = new networkvolume();
+            List<sharedresource> shares = new List<sharedresource>();
+            List<networkvolume> netvols = new List<networkvolume>();
             if (IsMappedNetworkDrive(drive))
             {
                 var host = GetNetworkDriveHostname(drive);
-                d.host = host.Split('\\')[2];
-                d.name = host.Split('\\')[3];
-                if (IsIPAddress(d.host))
+                var netvol = new networkvolume
                 {
-                    d.host = GetHostname(d.host);
+                    host = host.Split('\\')[2],
+                    name = host.Split('\\')[3],
+                    winpath = drive
+                };
+                if (IsIPAddress(netvol.host))
+                {
+                    netvol.host = GetHostname(netvol.host);
+                } else
+                {
+                    netvol.host = netvol.host.Split('.').First();
                 }
-                Console.WriteLine($"Network drive in: {d.host}");
+
+                netvols.Add(netvol);
+                //Console.WriteLine($"Network drive in: {d.host} {d.name}");
             }
             else
             {
-                var sharename = GetDriveShareName(drive);
-                Console.WriteLine($"Local drive shared as: {sharename}");
-                d.host = Dns.GetHostName();
-                d.name = sharename;
-            }
-            var drives = GetLinuxNetworkMounts();
-
-            string linuxmountpoint = default(string);
-            foreach (var i in drives)
-            {
-                if (d.Equals(i))
+                shares = GetDriveShareName(importFolder);
+                foreach (var share in shares)
                 {
-                    linuxmountpoint = i.mountpoint;
-                    break;
+                    netvols.Add(new networkvolume { host = Dns.GetHostName(), name = share.name, winpath=share.path.TrimEnd('\\')});
+                }
+                //d.host = Dns.GetHostName();
+                //d.name = sharename;
+            }
+
+            var drives = GetLinuxNetworkMounts(sshsettings, token);
+            if (token.IsCancellationRequested) return null;
+
+            List<string> matches = new List<string>();
+            foreach (var netvol in netvols)
+            {
+                foreach (var d in drives)
+                {
+                    if (d.host.ToLower() == netvol.host.ToLower() && d.name.ToLower() == netvol.name.ToLower()) {
+                        var test = importFolder.Replace(netvol.winpath, d.mountpoint).Replace("\\", "/");
+                        if (LinuxDirectoryIsCorrect(sshsettings, importFolder, test, token))
+                        {
+                            return test;
+                        }
+                    }
                 }
             }
 
-            var linuxpath = WindowsToLinux(importfolder, linuxmountpoint);
-            Console.WriteLine($"Linux path: {linuxpath}");
-            Console.ReadLine();
+            return null;
+
+        }
+
+        public static bool LinuxDirectoryIsCorrect(OptionsSshSettings settings, string importFolder, string linuxImportFolder, CancellationToken token, string testfilename = "")
+        {
+            bool exists = false;
+            if (importFolder == null || linuxImportFolder == null) { return false; }
+            if (linuxImportFolder == "") { return false; }
+            if (!Directory.Exists(importFolder)) { return false; }
+            if (testfilename == "") {
+                testfilename = DateTime.Now.ToString(".yyyyMMddHHmmss");
+            }
+            var fs = File.Create(Path.Combine(importFolder, testfilename));
+            fs.Dispose();
+            string LookupFile = linuxImportFolder.Trim().TrimEnd('/') + "/" + testfilename;
+            string cmd = $"echo ''; if [ -f {LookupFile} ]; then echo YES; fi; echo DONE";
+            try
+            {
+                using (var sshclient = new SshClient(settings.Server, settings.Port, settings.Username, settings.SshKeyObject))
+                {
+                    sshclient.Connect();
+                    using (var stream = sshclient.CreateShellStream("xterm", 80, 50, 1024, 1024, 1024))
+                    {
+                        stream.WriteLine(cmd);
+                        while (stream.CanRead)
+                        {
+                            if (token.IsCancellationRequested) break;
+                            var line = stream.ReadLine();
+                            if (line == "YES") exists = true;
+                            if (line == "DONE") break;
+                        }
+                    }
+                    sshclient.Disconnect();
+                }
+            }
+            catch (Exception ex) { }
+
+            int counter = 0;
+            while (true)
+            {
+                if (counter > 10) break;
+                try
+                {
+                    File.Delete(Path.Combine(importFolder, testfilename));
+                    break;
+                }
+                catch (IOException ex)
+                {
+                    Thread.Sleep(200);
+                }
+                counter++;
+            }
+            return exists;
         }
 
     }
@@ -407,6 +365,7 @@ namespace Playground
         public string host;
         public string name;
         public string mountpoint;
+        public string winpath;
 
         public bool Equals(networkvolume other)
         {
@@ -414,4 +373,11 @@ namespace Playground
             return false;
         }
     }
+
+    public class sharedresource
+    {
+        public string name;
+        public string path;
+    }
+
 }

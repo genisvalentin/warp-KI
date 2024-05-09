@@ -9,14 +9,18 @@ using System.Diagnostics.Contracts;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Security.RightsManagement;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Threading;
 using System.Xml;
 using System.Xml.XPath;
 using Warp.Tools;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.StartPanel;
 
 namespace Warp
 {
@@ -1454,6 +1458,22 @@ namespace Warp
     [JsonObject(MemberSerialization.OptIn)]
     public class OptionsMovement : WarpBase
     {
+        private bool _ExportMotionTracks = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool ExportMotionTracks
+        {
+            get { return _ExportMotionTracks; }
+            set
+            {
+                if (value != _ExportMotionTracks)
+                {
+                    _ExportMotionTracks = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
         private decimal _RangeMin = 0.05M;
         [WarpSerializable]
         [JsonProperty]
@@ -1986,6 +2006,129 @@ namespace Warp
         {
             get { return _CryosparcLicense; }
             set { if (value != _CryosparcLicense) { _CryosparcLicense = value; OnPropertyChanged(); } }
+        }
+
+        private bool _LinuxServerOK = false;
+        public bool LinuxServerOk {
+            get { return _LinuxServerOK; }
+            set { if (value != _LinuxServerOK) { _LinuxServerOK = value; OnPropertyChanged(); } }
+        }
+
+        private CancellationTokenSource TestLinuxServerConnectionToken = new CancellationTokenSource();
+
+        private bool _IsTestingLinuxServer = false;
+        public bool IsTestingLinuxServer
+        {
+            get { return _IsTestingLinuxServer; }
+            set { if (value != _IsTestingLinuxServer) { _IsTestingLinuxServer = value; OnPropertyChanged(); } }
+        }
+
+
+        private SemaphoreSlim GuessLinuxServerMountpointSemaphore = new SemaphoreSlim(1);
+        private CancellationTokenSource GuessLinuxServerMountpointToken = new CancellationTokenSource();
+
+        public async Task GuessLinuxServerMountpoint(CancellationToken token, string importFolder = null)
+        {
+            GuessLinuxServerMountpointToken.Cancel();
+            await GuessLinuxServerMountpointSemaphore.WaitAsync();
+            IsTestingLinuxServer = true;
+            GuessLinuxServerMountpointToken = new CancellationTokenSource();
+            var wortkask = Task.Run(() => { GuessLinuxServerMountpointWork(GuessLinuxServerMountpointToken.Token, importFolder); });
+            while (true)
+            {
+                if (token.IsCancellationRequested)
+                {
+                    GuessLinuxServerMountpointToken.Cancel();
+                    break;
+                }
+                if (wortkask.IsCompleted)
+                {
+                    break;
+                }
+                await Task.Delay(200);
+            }
+
+            GuessLinuxServerMountpointSemaphore.Release();
+            IsTestingLinuxServer = false;
+        }
+        private void GuessLinuxServerMountpointWork(CancellationToken token, string importFolder = null)
+        {
+            Console.WriteLine("Guess linux server");
+            if (Server == "" || UserName == "" || SshKeyObject == null || importFolder == null)
+            {
+                return;
+            }
+
+            if (!Directory.Exists(importFolder))
+            {
+                return;
+            }
+
+            var sshsettings = new OptionsSshSettings { IP = Server, Username = UserName, Port = Port, SshKeyObject = SshKeyObject };
+
+            string guessedpath = default(string);
+            guessedpath = GuessLinuxDirectory.GuessLinuxDirectoryFromPath(importFolder, sshsettings, token);
+            Console.WriteLine($"Guessed path: {guessedpath}");
+
+            if (guessedpath != null)
+            {
+                LinuxServerOk = true;
+                ClassificationMountPoint = guessedpath;
+            }
+        }
+            
+
+        private SemaphoreSlim TestLinuxServerSemaphore = new SemaphoreSlim(1);
+        public async Task TestLinuxServerConnection(CancellationToken token, string importFolder = null)
+        {
+            TestLinuxServerConnectionToken.Cancel();
+            await TestLinuxServerSemaphore.WaitAsync();
+            IsTestingLinuxServer = true;
+            TestLinuxServerConnectionToken = new CancellationTokenSource();
+            var wortkask = Task.Run(() => { TestLinuxServerConnectionWork(TestLinuxServerConnectionToken.Token, importFolder); });
+            while (true)
+            {
+                if (token.IsCancellationRequested)
+                {
+                    TestLinuxServerConnectionToken.Cancel();
+                    break;
+                }
+                if (wortkask.IsCompleted)
+                {
+                    break;
+                }
+                await Task.Delay(200);
+            }
+
+            TestLinuxServerSemaphore.Release();
+            IsTestingLinuxServer = false;
+        }
+
+        private void TestLinuxServerConnectionWork(CancellationToken token, string importFolder = null)
+        {
+            Console.WriteLine("Testing linux server");
+            if (Server == "" || UserName == "" || SshKeyObject == null || importFolder == null)
+            {
+                LinuxServerOk = false;
+                return;
+            }
+
+            if ( !Directory.Exists(importFolder) )
+            {
+                LinuxServerOk = false;
+                return;
+            }
+
+            var sshsettings = new OptionsSshSettings { IP = Server, Username = UserName, Port = Port, SshKeyObject = SshKeyObject };
+
+            if (GuessLinuxDirectory.LinuxDirectoryIsCorrect(sshsettings, importFolder, ClassificationMountPoint, token))
+            {
+                LinuxServerOk = true;
+            }
+            else
+            {
+                LinuxServerOk = false;
+            }
         }
     }
 
@@ -2911,7 +3054,10 @@ namespace Warp
             {
                 if (value != linuxPath)
                 {
-                    linuxPath = value.TrimEnd('/');
+                    if (value != null)
+                    {
+                        linuxPath = value.TrimEnd('/');
+                    }
                     OnPropertyChanged();
                 }
             }
@@ -2948,11 +3094,10 @@ namespace Warp
         public bool LinuxServerOk
         {
             get => _linuxServerOk;
-            private set
+            set
             {
                 if (value != _linuxServerOk)
                 {
-                    Console.WriteLine("LinuxServerOK");
                     _linuxServerOk = value;
                     OnPropertyChanged();
                 }
@@ -2980,15 +3125,85 @@ namespace Warp
             set { if (value != _topazEnv) { _topazEnv = value; OnPropertyChanged(); } }
         }
 
-        public void TestLinuxServerConnection()
+        private bool _IsTestingLinuxServer = false;
+        [WarpSerializable]
+        [JsonProperty]
+        public bool IsTestingLinuxServer
         {
-            Console.WriteLine("Testing linux server");
+            get { return _IsTestingLinuxServer; }
+            set { if (value != _IsTestingLinuxServer) { _IsTestingLinuxServer = value; OnPropertyChanged(); } }
+        }
+
+        private SemaphoreSlim TestLinuxServerSemaphore = new SemaphoreSlim(1);
+        private CancellationTokenSource TestLinuxServerConnectionToken = new CancellationTokenSource();
+        public async Task TestLinuxServerConnection(CancellationToken token, string importFolder = null)
+        {
+            TestLinuxServerConnectionToken.Cancel();
+            await TestLinuxServerSemaphore.WaitAsync();
+            Console.WriteLine("Testing linux server tomo");
+            IsTestingLinuxServer = true;
+            TestLinuxServerConnectionToken = new CancellationTokenSource();
+            var wortkask = Task.Run(() => { TestLinuxServerConnectionWork(TestLinuxServerConnectionToken.Token, importFolder); });
+            while (true)
+            {
+                if (token.IsCancellationRequested)
+                {
+                    TestLinuxServerConnectionToken.Cancel();
+                    break;
+                }
+                if (wortkask.IsCompleted)
+                {
+                    break;
+                }
+                await Task.Delay(200);
+            }
+            if (TestLinuxServerConnectionToken.IsCancellationRequested)
+            {
+                Console.WriteLine("Testing linux server tomo cancelled");
+            }
+            TestLinuxServerSemaphore.Release();
+            IsTestingLinuxServer = false;
+        }
+
+        private void TestLinuxServerConnectionWork(CancellationToken token, string importFolder = null)
+        {
+            
+            if (Server == "" || Username == "" || SshKeyObject == null || importFolder == null)
+            {
+                LinuxServerOk = false;
+                return;
+            }
+
+            if (!Directory.Exists(importFolder))
+            {
+                LinuxServerOk = false;
+                return;
+            }
+
+            var sshsettings = new OptionsSshSettings { IP = Server, Username = Username, Port = Port, SshKeyObject = SshKeyObject };
+
+            if (GuessLinuxDirectory.LinuxDirectoryIsCorrect(sshsettings, importFolder, LinuxPath, token, DateTime.Now.ToString(".yyyyMMddHHmmss")+"tomo"))
+            {
+                LinuxServerOk = true;
+            }
+            else
+            {
+                LinuxServerOk = false;
+            }
+
+            FindAretomoVersion(token);
+        }
+
+        public void FindAretomoVersion(CancellationToken token)
+        {
+            Console.WriteLine("Testing linux server tomo");
             if (IP == "" || Username == "" || SshKeyObject == null || LinuxPath == "")
             {
                 LinuxServerOk = false;
                 Auto = false;
                 return;
             }
+
             try
             {
                 using (var sshclient = new SshClient(Server, Port, Username, SshKeyObject))
@@ -2996,29 +3211,12 @@ namespace Warp
                     sshclient.Connect();
                     using (var stream = sshclient.CreateShellStream("xterm", 80, 50, 1024, 1024, 1024))
                     {
-                        var cmd = String.Format("echo ''; if [[ -d '{0}' ]];then echo YES;fi; echo NO", LinuxPath);
-                        stream.WriteLine(cmd);
-                        while (stream.CanRead)
-                        {
-                            var line = stream.ReadLine();
-                            Console.WriteLine(line);
-                            if (line == "YES")
-                            {
-                                LinuxServerOk = true;
-                                break;
-                            }
-                            if (line == "NO")
-                            {
-                                LinuxServerOk = false;
-                                Auto = false;
-                                break;
-                            }
-                        }
                         if (LinuxServerOk)
                         {
                             stream.WriteLine("echo ''; aretomo --version;echo DONE");
                             while (stream.CanRead)
                             {
+                                if (token.IsCancellationRequested) break;
                                 var line = stream.ReadLine();
                                 Console.WriteLine(line);
                                 if (line.StartsWith("AreTomo "))
@@ -3049,8 +3247,61 @@ namespace Warp
             }
         }
 
-        public CheckBox[] CheckboxesSshGPUS = new CheckBox[0];
 
+        private SemaphoreSlim GuessLinuxServerMountpointSemaphore = new SemaphoreSlim(1);
+        private CancellationTokenSource GuessLinuxServerMountpointToken = new CancellationTokenSource();
+
+        public async Task GuessLinuxServerMountpoint(CancellationToken token, string importFolder = null)
+        {
+            GuessLinuxServerMountpointToken.Cancel();
+            await GuessLinuxServerMountpointSemaphore.WaitAsync();
+            IsTestingLinuxServer = true;
+            GuessLinuxServerMountpointToken = new CancellationTokenSource();
+            var wortkask = Task.Run(() => { GuessLinuxServerMountpointWork(GuessLinuxServerMountpointToken.Token, importFolder); });
+            while (true)
+            {
+                if (token.IsCancellationRequested)
+                {
+                    GuessLinuxServerMountpointToken.Cancel();
+                    break;
+                }
+                if (wortkask.IsCompleted)
+                {
+                    break;
+                }
+                await Task.Delay(200);
+            }
+
+            GuessLinuxServerMountpointSemaphore.Release();
+            IsTestingLinuxServer = false;
+        }
+        private void GuessLinuxServerMountpointWork(CancellationToken token, string importFolder = null)
+        {
+            Console.WriteLine("Guess linux server tomo");
+            if (Server == "" || Username == "" || SshKeyObject == null || importFolder == null)
+            {
+                return;
+            }
+
+            if (!Directory.Exists(importFolder))
+            {
+                return;
+            }
+
+            var sshsettings = new OptionsSshSettings { IP = Server, Username = Username, Port = Port, SshKeyObject = SshKeyObject };
+
+            string guessedpath = default(string);
+            guessedpath = GuessLinuxDirectory.GuessLinuxDirectoryFromPath(importFolder, sshsettings, token);
+            Console.WriteLine($"Guessed path TOMO: {guessedpath}");
+
+            if (guessedpath != null)
+            {
+                LinuxServerOk = true;
+                LinuxPath = guessedpath;
+            }
+        }
+
+        public CheckBox[] CheckboxesSshGPUS = new CheckBox[0];
 
         public void ListGPUsSsh()
         {
@@ -3068,7 +3319,7 @@ namespace Warp
                     sshclient.Connect();
                     using (var stream = sshclient.CreateShellStream("xterm", 80, 50, 1024, 1024, 1024))
                     {
-                        var cmd = "nvidia-smi -L; echo DONE";
+                        var cmd = "echo ''; nvidia-smi -L; echo DONE";
                         stream.WriteLine(cmd);
                         while (stream.CanRead)
                         {

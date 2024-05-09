@@ -280,6 +280,9 @@ namespace cryosparcClient
                 LogToFile($"Could not get ab-initio job with {nvolumes} classes");
                 return ("");
             }
+
+            uidList.Sort((a, b) => int.Parse(a.Substring(1)).CompareTo(int.Parse(b.Substring(1))));
+
             LogToFile($"Found ab-initio job with {nvolumes} classes: {uidList.Last()}");
             return (uidList.Last());
         }
@@ -361,6 +364,9 @@ namespace cryosparcClient
                 LogToFile($"Could not get hetero refiement job with {nvolumes} classes");
                 return ("");
             }
+
+            uidList.Sort( (a,b) =>  int.Parse(a.Substring(1)).CompareTo(int.Parse(b.Substring(1))) );
+
             LogToFile($"Found hetero refiement job with {nvolumes} classes: {uidList.Last()}");
             return (uidList.Last());
         }
@@ -383,7 +389,10 @@ namespace cryosparcClient
                 {
                     if (group.type == "volume")
                     {
-                        available_volumes.Add(group.name);
+                        if (group.contains.First()["type"] == "volume.blob")
+                        {
+                            available_volumes.Add(group.name);
+                        }
                     }
                 }
                 return (available_volumes.ToArray());

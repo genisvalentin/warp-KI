@@ -35,10 +35,31 @@ namespace Warp.Controls
             Options = options;
             DataContext = Options.Classification;
             InitializeComponent();
+            Options.PropertyChanged += Options_PropertyChanged;
             if (Options.Classification.SshKey != null)
             {
                 ButtonClassificationSshKeyText.Text = Options.Classification.SshKey.Trim() == "" ? "Select Ssh key..." : Options.Classification.SshKey;
             }
+            Dispatcher.Invoke(() =>
+            {
+                if (Options.Classification.IsTestingLinuxServer == true)
+                {
+                    TestingLinuxServerIndicator.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    TestingLinuxServerIndicator.Visibility = Visibility.Collapsed;
+                }
+
+                if (Options.Classification.LinuxServerOk)
+                {
+                    ClassificationMountPointTextBox.Foreground = new SolidColorBrush(Colors.Green);
+                }
+                else
+                {
+                    ClassificationMountPointTextBox.Foreground = new SolidColorBrush(Colors.Red);
+                }
+            });
         }
 
         private void ButtonMountPoint_OnClick(object sender, RoutedEventArgs e)
@@ -104,6 +125,36 @@ namespace Warp.Controls
                 }
             }
 
+        }
+
+        private async void Options_PropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == "Classification.IsTestingLinuxServer")
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (Options.Classification.IsTestingLinuxServer == true)
+                    {
+                        TestingLinuxServerIndicator.Visibility = Visibility.Visible;
+                    } else {
+                        TestingLinuxServerIndicator.Visibility = Visibility.Collapsed;
+                    }
+                });
+            }
+            else if (e.PropertyName == "Classification.LinuxServerOk")
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (Options.Classification.LinuxServerOk)
+                    {
+                        ClassificationMountPointTextBox.Foreground = new SolidColorBrush(Colors.Green);
+                    }
+                    else
+                    {
+                        ClassificationMountPointTextBox.Foreground = new SolidColorBrush(Colors.Red);
+                    }
+                });
+            }
         }
     }
 

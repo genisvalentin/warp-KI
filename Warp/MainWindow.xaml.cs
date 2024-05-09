@@ -61,6 +61,9 @@ namespace Warp
 
         public CancellationTokenSource EPUSessionCancellationToken { get; set; } = new CancellationTokenSource();
 
+        public CancellationTokenSource GuessLinuxServerToken { get; set; } = new CancellationTokenSource();
+
+
         EPUSessionManager sessionManager;
 
         List<Movie> HasOpticsGroup = new List<Movie>();
@@ -474,6 +477,8 @@ namespace Warp
                 EPUSessionCancellationToken.Dispose();
                 sessionManager.SwitchSessionCancellationTokenSource.Cancel();
                 sessionManager.SwitchSessionCancellationTokenSource.Dispose();
+                GuessLinuxServerToken.Cancel();
+                GuessLinuxServerToken.Dispose();
                 SaveDefaultSettings();
                 FileDiscoverer.Shutdown();
             }
@@ -630,8 +635,8 @@ namespace Warp
                 }
                 ButtonInputPathText.Text = Options.Import.UserFolder == "" ? "Select folder..." : Options.Import.UserFolder;
                 ButtonInputPathText.ToolTip = Options.Import.UserFolder == "" ? "" : Options.Import.UserFolder;
-                //sessionManager.ChangedImportFolder();
                 Options.TiltSeries.MdocFilesDirectory = Options.Import.UserFolder;
+
                 if (OptionsLookForFolderOptions && !Options.Stacker.GridScreening && sessionManager.CanLoadDefaultOptions)
                 {
                     OptionsLookForFolderOptions = false;
@@ -657,6 +662,34 @@ namespace Warp
 
                     OptionsLookForFolderOptions = true;
                 }
+
+                Task.Run(async () =>
+                {
+                    Options.SshSettings.IsTestingLinuxServer = true;
+
+                    //Check if directory is correct
+                    await Options.Classification.TestLinuxServerConnection(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                    //If it is not correct, try to guess it and set a correct linux mountpoint
+                    if (!Options.Classification.LinuxServerOk)
+                    {
+                        await Options.Classification.GuessLinuxServerMountpoint(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                    }
+
+                    //If it is not correct, try to guess it and set a correct linux mountpoint
+                    if (Options.SshSettings.Server == Options.Classification.Server)
+                    {
+                        Options.SshSettings.LinuxPath = Options.Classification.ClassificationMountPoint;
+                        Options.SshSettings.IsTestingLinuxServer = false;
+                    }
+                    else
+                    {
+                        await Options.SshSettings.TestLinuxServerConnection(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                        if (!Options.SshSettings.LinuxServerOk)
+                        {
+                            await Options.SshSettings.GuessLinuxServerMountpoint(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                        }
+                    }
+                });
             }
             else if (e.PropertyName == "Import.InvertAngles")
             {
@@ -785,10 +818,10 @@ namespace Warp
             {
                 sessionManager.NeedsNewOpticsGroup = true;
             }
-			else if (e.PropertyName == "Stacker.Folder")
-			{
-				ButtonStackerPathText.Text = Options.Stacker.Folder == "" ? "Select folder..." : Options.Stacker.Folder;
-			}
+            else if (e.PropertyName == "Stacker.Folder")
+            {
+                ButtonStackerPathText.Text = Options.Stacker.Folder == "" ? "Select folder..." : Options.Stacker.Folder;
+            }
             else if (e.PropertyName == "Classification.Results")
             {
                 ButtonClassificationResultsText.Text = Options.Classification.Results;
@@ -815,36 +848,74 @@ namespace Warp
             {
                 Dispatcher.Invoke(() =>
                 {
-                   ButtonTimeToNextClassificationText.Text = Options.Classification.Countdown;
+                    ButtonTimeToNextClassificationText.Text = Options.Classification.Countdown;
                 });
             }
+            else if (e.PropertyName == "Classification.UserName" || e.PropertyName == "Classification.SshKey")
+            {
+                Task.Run(async () =>
+                {
+                    //Check if directory is correct
+                    await Options.Classification.TestLinuxServerConnection(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                    //If it is not correct, try to guess it
+                    if (!Options.Classification.LinuxServerOk)
+                    {
+                        await Options.Classification.GuessLinuxServerMountpoint(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                    }
+                });
+            }
+            else if (e.PropertyName == "Classification.ClassificationMountPoint")
+            {
+                Task.Run(async () =>
+                {
+                    //Check if directory is correct
+                    await Options.Classification.TestLinuxServerConnection(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                });
+            }
+
             else if (e.PropertyName == "SshSettings.SshKey")
             {
                 ButtonSshKeyText.Text = Options.SshSettings.SshKey == "" ? "Select SSH key..." : Options.SshSettings.SshKey;
-                Task.Run(() =>
+                Task.Run(async () =>
                {
-                   Options.SshSettings.TestLinuxServerConnection();
+                   await Options.SshSettings.TestLinuxServerConnection(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                   if (!Options.SshSettings.LinuxServerOk)
+                   {
+                       await Options.SshSettings.GuessLinuxServerMountpoint(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                   }
                });
             }
             else if (e.PropertyName == "SshSettings.LinuxPath")
             {
-                Task.Run(() =>
+                Task.Run(async () =>
                 {
-                    Options.SshSettings.TestLinuxServerConnection();
+                    if (Options.SshSettings.LinuxPath != null || Options.SshSettings.LinuxPath != "")
+                    {
+                        await Options.SshSettings.TestLinuxServerConnection(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                    }
+                });
+
+                Dispatcher.Invoke(() =>
+                {
+                    if (Options.SshSettings.LinuxServerOk)
+                    {
+                        TextBoxSshSettingsLinuxPath.Foreground = new SolidColorBrush(Colors.Green);
+                    }
+                    else
+                    {
+                        TextBoxSshSettingsLinuxPath.Foreground = new SolidColorBrush(Colors.Red);
+                    }
                 });
             }
-            else if (e.PropertyName == "SshSettings.Username")
+            else if (e.PropertyName == "SshSettings.Username" || e.PropertyName == "SshSettings.IP")
             {
-                Task.Run(() =>
+                Task.Run(async () =>
                 {
-                    Options.SshSettings.TestLinuxServerConnection();
-                });
-            }
-            else if (e.PropertyName == "SshSettings.IP")
-            {
-                Task.Run(() =>
-                {
-                    Options.SshSettings.TestLinuxServerConnection();
+                    await Options.SshSettings.TestLinuxServerConnection(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                    if (!Options.SshSettings.LinuxServerOk)
+                    {
+                        await Options.SshSettings.GuessLinuxServerMountpoint(GuessLinuxServerToken.Token, Options.Import.UserFolder);
+                    }
                 });
             }
             else if (e.PropertyName == "SshSettings.Auto")
@@ -857,6 +928,32 @@ namespace Warp
                 {
                     UpdateSshGpus();
                 }
+
+                Dispatcher.Invoke(() =>
+                {
+                    if (Options.SshSettings.LinuxServerOk)
+                    {
+                        TextBoxSshSettingsLinuxPath.Foreground = new SolidColorBrush(Colors.Green);
+                    }
+                    else
+                    {
+                        TextBoxSshSettingsLinuxPath.Foreground = new SolidColorBrush(Colors.Red);
+                    }
+                });
+            }
+            else if (e.PropertyName == "SshSettings.IsTestingLinuxServer")
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (Options.SshSettings.IsTestingLinuxServer == true)
+                    {
+                        TestingLinuxServerIndicator.Visibility = Visibility.Visible;
+                    }
+                    else
+                    {
+                        TestingLinuxServerIndicator.Visibility = Visibility.Collapsed;
+                    }
+                });
             }
             else if (e.PropertyName == "TiltSeries.TiltSeriesList")
             {
@@ -1418,341 +1515,346 @@ namespace Warp
 
                 bool IsTomo = Options.Import.ExtensionTomoSTAR;
 
-				PreprocessingTask = Task.Run(async () =>
+                PreprocessingTask = Task.Run(async () =>
                 {
-                    int NDevices = GPU.GetDeviceCount();
-                    List<int> UsedDevices = GetDeviceList();
-                    List<int> UsedDeviceProcesses = Helper.Combine(Helper.ArrayOfFunction(i => UsedDevices.Select(d => d + i * NDevices).ToArray(), GlobalOptions.ProcessesPerDevice)).ToList();
+                int NDevices = GPU.GetDeviceCount();
+                List<int> UsedDevices = GetDeviceList();
+                List<int> UsedDeviceProcesses = Helper.Combine(Helper.ArrayOfFunction(i => UsedDevices.Select(d => d + i * NDevices).ToArray(), GlobalOptions.ProcessesPerDevice)).ToList();
 
-                    #region Check if options are compatible
+                #region Check if options are compatible
 
+                {
+                    string ErrorMessage = "";
+                }
+
+                #endregion
+
+                #region Load gain reference if needed
+
+                Image ImageGain = null;
+                DefectModel DefectMap = null;
+                if (!string.IsNullOrEmpty(Options.Import.GainPath) && Options.Import.CorrectGain && File.Exists(Options.Import.GainPath))
+                    try
                     {
-                        string ErrorMessage = "";
+                        ImageGain = LoadAndPrepareGainReference();
+                    }
+                    catch (Exception exc)
+                    {
+                        ImageGain?.Dispose();
+
+                        await Dispatcher.InvokeAsync(async () =>
+                        {
+                            await this.ShowMessageAsync("Oopsie",
+                                                        "Something went wrong when trying to load the gain reference.\n\n" +
+                                                        "The exception raised is:\n" + exc);
+
+                            ButtonStartProcessing_OnClick(sender, e);
+                        });
+
+                        return;
+                    }
+                if (!string.IsNullOrEmpty(Options.Import.DefectsPath) && Options.Import.CorrectDefects && File.Exists(Options.Import.DefectsPath))
+                    try
+                    {
+                        DefectMap = LoadAndPrepareDefectMap();
+
+                        if (ImageGain != null && new int2(ImageGain.Dims) != DefectMap.Dims)
+                            throw new Exception("Defect map and gain reference dimensions don't match.");
+                    }
+                    catch (Exception exc)
+                    {
+                        DefectMap?.Dispose();
+
+                        await Dispatcher.InvokeAsync(async () =>
+                        {
+                            await this.ShowMessageAsync("Oopsie",
+                                                        "Something went wrong when trying to load the defect map.\n\n" +
+                                                        "The exception raised is:\n" + exc);
+
+                            ButtonStartProcessing_OnClick(sender, e);
+                        });
+
+                        return;
                     }
 
-                    #endregion
+                #endregion
 
-                    #region Load gain reference if needed
+                #region Load BoxNet model if needed
 
-                    Image ImageGain = null;
-                    DefectModel DefectMap = null;
-                    if (!string.IsNullOrEmpty(Options.Import.GainPath) && Options.Import.CorrectGain && File.Exists(Options.Import.GainPath))
-                        try
-                        {
-                            ImageGain = LoadAndPrepareGainReference();
-                        }
-                        catch (Exception exc)
-                        {
-                            ImageGain?.Dispose();
+                BoxNet2[] BoxNetworks = new BoxNet2[NDevices];
+                object[] BoxNetLocks = Helper.ArrayOfFunction(i => new object(), NDevices);
 
-                            await Dispatcher.InvokeAsync(async () =>
-                            {
-                                await this.ShowMessageAsync("Oopsie",
-                                                            "Something went wrong when trying to load the gain reference.\n\n" +
-                                                            "The exception raised is:\n" + exc);
+                if (!IsTomo && Options.ProcessPicking)
+                {
+                    ProgressDialogController ProgressDialog = null;
 
-                                ButtonStartProcessing_OnClick(sender, e);
-                            });
+                    Image.FreeDeviceAll();
 
-                            return;
-                        }
-                    if (!string.IsNullOrEmpty(Options.Import.DefectsPath) && Options.Import.CorrectDefects && File.Exists(Options.Import.DefectsPath))
-                        try
-                        {
-                            DefectMap = LoadAndPrepareDefectMap();
-
-                            if (ImageGain != null && new int2(ImageGain.Dims) != DefectMap.Dims)
-                                throw new Exception("Defect map and gain reference dimensions don't match.");
-                        }
-                        catch (Exception exc)
-                        {
-                            DefectMap?.Dispose();
-
-                            await Dispatcher.InvokeAsync(async () =>
-                            {
-                                await this.ShowMessageAsync("Oopsie",
-                                                            "Something went wrong when trying to load the defect map.\n\n" +
-                                                            "The exception raised is:\n" + exc);
-
-                                ButtonStartProcessing_OnClick(sender, e);
-                            });
-
-                            return;
-                        }
-
-                    #endregion
-
-                    #region Load BoxNet model if needed
-
-                    BoxNet2[] BoxNetworks = new BoxNet2[NDevices];
-                    object[] BoxNetLocks = Helper.ArrayOfFunction(i => new object(), NDevices);
-
-                    if (!IsTomo && Options.ProcessPicking)
+                    try
                     {
-                        ProgressDialogController ProgressDialog = null;
+                        await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Loading {Options.Picking.ModelPath} model...", ""));
+                        ProgressDialog.SetIndeterminate();
 
-                        Image.FreeDeviceAll();
+                        if (string.IsNullOrEmpty(Options.Picking.ModelPath) || LocatePickingModel(Options.Picking.ModelPath) == null)
+                            throw new Exception("No BoxNet model selected. Please use the options panel to select a model.");
 
-                        try
+                        MicrographDisplayControl.DropBoxNetworks();
+                        foreach (var d in UsedDevices)
+                            BoxNetworks[d] = new BoxNet2(LocatePickingModel(Options.Picking.ModelPath), d, 2, 1, false);
+                    }
+                    catch (Exception exc)
+                    {
+                        await Dispatcher.Invoke(async () =>
                         {
-                            await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Loading {Options.Picking.ModelPath} model...", ""));
+                            await ((MainWindow)Application.Current.MainWindow).ShowMessageAsync("Oopsie",
+                                                                                                "There was an error loading the specified BoxNet model for picking.\n\n" +
+                                                                                                "The exception raised is:\n" + exc);
+
+                            ButtonStartProcessing_OnClick(sender, e);
+                        });
+
+                        ImageGain?.Dispose();
+                        DefectMap?.Dispose();
+
+                        await ProgressDialog.CloseAsync();
+
+                        return;
+                    }
+
+                    await ProgressDialog.CloseAsync();
+                }
+
+                #endregion
+
+                #region Load or create STAR table for BoxNet output, if needed
+
+                string BoxNetSuffix = Helper.PathToNameWithExtension(Options.Picking.ModelPath);
+
+                Star TableBoxNetAll = null;
+                string PathBoxNetAll = Path.Combine(Options.Import.Folder, "allparticles_" + BoxNetSuffix + ".star");
+                string PathBoxNetAllSubset = Path.Combine(Options.Import.Folder, "allparticles_last" + Options.Picking.RunningWindowLength + "_" + BoxNetSuffix + ".star");
+                string PathBoxNetFiltered = Path.Combine(Options.Import.Folder, "goodparticles_" + BoxNetSuffix + ".star");
+                if (Options.ProcessClassification)
+                {
+                    sessionManager.PathBoxNetFiltered = PathBoxNetFiltered;
+                }
+                string PathBoxNetFilteredSubset = Path.Combine(Options.Import.Folder, "goodparticles_last" + Options.Picking.RunningWindowLength + "_" + BoxNetSuffix + ".star");
+                object TableBoxNetAllWriteLock = new object();
+                int TableBoxNetConcurrent = 0;
+
+                // Switch filter suffix to the one used in current processing
+                //if (Options.ProcessPicking)
+                //    Dispatcher.Invoke(() => Options.Filter.ParticlesSuffix = "_" + BoxNetSuffix);
+
+                Dictionary<Movie, List<List<string>>> AllMovieParticleRows = new Dictionary<Movie, List<List<string>>>();
+                string og = "0";
+
+                if (!IsTomo && Options.ProcessPicking && Options.Picking.DoExport && !string.IsNullOrEmpty(Options.Picking.ModelPath))
+                {
+                    Movie[] TempMovies = FileDiscoverer.GetImmutableFiles();
+
+                    if (File.Exists(PathBoxNetAll))
+                    {
+                        TableBoxNetAll = new Star(PathBoxNetAll, "particles");
+                        if (TableBoxNetAll.RowCount == 0) { TableBoxNetAll = new Star(PathBoxNetAll); }
+                        //TableBoxNetAll = new Star(PathBoxNetAll);
+                        LogToFile("TableBoxNetAll.RowCount is " + TableBoxNetAll.RowCount.ToString());
+                        if (TableBoxNetAll.RowCount < 2)
+                        {
+                            File.Delete(PathBoxNetAll);
+                            TableBoxNetAll = new Star(new string[] { });
+                        }
+                        else {
+                            ProgressDialogController ProgressDialog = null;
+                            await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Loading particle metadata from previous run...", ""));
                             ProgressDialog.SetIndeterminate();
 
-                            if (string.IsNullOrEmpty(Options.Picking.ModelPath) || LocatePickingModel(Options.Picking.ModelPath) == null)
-                                throw new Exception("No BoxNet model selected. Please use the options panel to select a model.");
+                            //Original WARP code
+                            /*
+                            Dictionary<string, Movie> NameMapping = new Dictionary<string, Movie>();
+                            string[] ColumnMicName = TableBoxNetAll.GetColumn("rlnMicrographName");
+                            ColumnMicName = ColumnMicName.Select( x => micrographToMovieName(x)).ToArray();
 
-                            MicrographDisplayControl.DropBoxNetworks();
-                            foreach (var d in UsedDevices)
-                                BoxNetworks[d] = new BoxNet2(LocatePickingModel(Options.Picking.ModelPath), d, 2, 1, false);
-                        }
-                        catch (Exception exc)
-                        {
-                            await Dispatcher.Invoke(async () =>
+                            for (int r = 0; r < ColumnMicName.Length; r++)
                             {
-                                await ((MainWindow)Application.Current.MainWindow).ShowMessageAsync("Oopsie",
-                                                                                                    "There was an error loading the specified BoxNet model for picking.\n\n" +
-                                                                                                    "The exception raised is:\n" + exc);
+                                if (!NameMapping.ContainsKey(ColumnMicName[r]))
+                                {
+                                    var Movie = TempMovies.Where(m => ColumnMicName[r].Contains(m.Name));
+                                    if (Movie.Count() != 1)
+                                        continue;
 
-                                ButtonStartProcessing_OnClick(sender, e);
-                            });
+                                    NameMapping.Add(ColumnMicName[r], Movie.First());
+                                    AllMovieParticleRows.Add(Movie.First(), new List<List<string>>());
+                                }
 
-                            ImageGain?.Dispose();
-                            DefectMap?.Dispose();
+                                AllMovieParticleRows[NameMapping[ColumnMicName[r]]].Add(TableBoxNetAll.GetRow(r));
+                            }
+                            */
+
+                            // Optimized code using LINQ
+
+                            int ColumnIndex = TableBoxNetAll.GetColumnNames().ToList().IndexOf("rlnMicrographName");
+
+                            var AllParticlesDict = TableBoxNetAll
+                                .GetAllRows()
+                                .GroupBy(r => r[ColumnIndex])
+                                .ToDictionary(
+                                    group => micrographToMovieName(group.Key),
+                                    group => group.ToList()
+                                );
+
+                            AllMovieParticleRows = TempMovies
+                                .Where(movie => AllParticlesDict.ContainsKey(movie.Name))
+                                .ToDictionary(movie => movie, movie => AllParticlesDict[movie.Name]);
+
+                            if (Options.Picking.WriteOpticGroups)
+                            {
+                                foreach (var m in AllMovieParticleRows.Keys.Distinct())
+                                {
+                                    _ = sessionManager.GetOpticsGroup(m.Name);
+                                }
+                            }
 
                             await ProgressDialog.CloseAsync();
+                        }
+                    }
+                    else
+                    {
+                        TableBoxNetAll = new Star(new string[] { });
+                    }
 
-                            return;
+
+                    #region Make sure all columns are there
+
+                    if (!TableBoxNetAll.HasColumn("rlnCoordinateX"))
+                        TableBoxNetAll.AddColumn("rlnCoordinateX", "0.0");
+
+                    if (!TableBoxNetAll.HasColumn("rlnCoordinateY"))
+                        TableBoxNetAll.AddColumn("rlnCoordinateY", "0.0");
+
+                    if (!TableBoxNetAll.HasColumn("rlnMagnification"))
+                        TableBoxNetAll.AddColumn("rlnMagnification", "10000.0");
+                    else
+                        TableBoxNetAll.SetColumn("rlnMagnification", Helper.ArrayOfConstant("10000.0", TableBoxNetAll.RowCount));
+
+                    if (!TableBoxNetAll.HasColumn("rlnDetectorPixelSize"))
+                        TableBoxNetAll.AddColumn("rlnDetectorPixelSize", Options.Picking.DoFourierCrop ? ((float)Options.BinnedPixelSizeMean * Options.Picking.BoxSize / Options.Picking.FourierCropBox).ToString("F5", CultureInfo.InvariantCulture) : Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture));
+                    else
+                        TableBoxNetAll.SetColumn("rlnDetectorPixelSize", Helper.ArrayOfConstant(Options.Picking.DoFourierCrop ? ((float)Options.BinnedPixelSizeMean * Options.Picking.BoxSize / Options.Picking.FourierCropBox).ToString("F5", CultureInfo.InvariantCulture) : Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture), TableBoxNetAll.RowCount));
+
+                    if (!TableBoxNetAll.HasColumn("rlnVoltage"))
+                        TableBoxNetAll.AddColumn("rlnVoltage", "300.0");
+
+                    if (!TableBoxNetAll.HasColumn("rlnSphericalAberration"))
+                        TableBoxNetAll.AddColumn("rlnSphericalAberration", "2.7");
+
+                    if (!TableBoxNetAll.HasColumn("rlnAmplitudeContrast"))
+                        TableBoxNetAll.AddColumn("rlnAmplitudeContrast", "0.07");
+
+                    if (!TableBoxNetAll.HasColumn("rlnPhaseShift"))
+                        TableBoxNetAll.AddColumn("rlnPhaseShift", "0.0");
+
+                    if (!TableBoxNetAll.HasColumn("rlnDefocusU"))
+                        TableBoxNetAll.AddColumn("rlnDefocusU", "0.0");
+
+                    if (!TableBoxNetAll.HasColumn("rlnDefocusV"))
+                        TableBoxNetAll.AddColumn("rlnDefocusV", "0.0");
+
+                    if (!TableBoxNetAll.HasColumn("rlnDefocusAngle"))
+                        TableBoxNetAll.AddColumn("rlnDefocusAngle", "0.0");
+
+                    if (!TableBoxNetAll.HasColumn("rlnCtfMaxResolution"))
+                        TableBoxNetAll.AddColumn("rlnCtfMaxResolution", "999.0");
+
+                    if (!TableBoxNetAll.HasColumn("rlnImageName"))
+                        TableBoxNetAll.AddColumn("rlnImageName", "None");
+
+                    if (!TableBoxNetAll.HasColumn("rlnMicrographName"))
+                        TableBoxNetAll.AddColumn("rlnMicrographName", "None");
+
+                    if (Options.Picking.WriteOpticGroups) {
+                        if (!TableBoxNetAll.HasColumn("rlnOpticsGroup"))
+                            TableBoxNetAll.AddColumn("rlnOpticsGroup", "0");
+                    } else if (TableBoxNetAll.HasColumn("rlnOpticsGroup"))
+                    {
+                        TableBoxNetAll.RemoveColumn("rlnOpticsGroup");
+                    }
+                    #endregion
+
+                    #region Repair
+
+                    var RepairMovies = TempMovies.Where(m => !AllMovieParticleRows.ContainsKey(m) && m.OptionsBoxNet != null && File.Exists(m.MatchingDir + m.RootName + "_" + BoxNetSuffix + ".star")).ToList();
+                    Console.WriteLine($"Repairing {RepairMovies.Count} movies");
+                    if (RepairMovies.Count() > 0)
+                    {
+                        ProgressDialogController ProgressDialog = null;
+                        await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Repairing particle metadata...", ""));
+
+                        int NRepaired = 0;
+                        foreach (var item in RepairMovies)
+                        {
+                            float2[] Positions = Star.LoadFloat2(item.MatchingDir + item.RootName + "_" + BoxNetSuffix + ".star",
+                                                                 "rlnCoordinateX",
+                                                                 "rlnCoordinateY");
+
+                            float[] Defoci = new float[Positions.Length];
+                            if (item.GridCTFDefocus != null)
+                                Defoci = item.GridCTFDefocus.GetInterpolated(Positions.Select(v => new float3(v.X / (item.OptionsBoxNet.Dimensions.X / (float)item.OptionsBoxNet.BinnedPixelSizeMean),
+                                                                                                       v.Y / (item.OptionsBoxNet.Dimensions.Y / (float)item.OptionsBoxNet.BinnedPixelSizeMean),
+                                                                                                       0.5f)).ToArray());
+                            float Astigmatism = (float)item.CTF.DefocusDelta / 2;
+                            float PhaseShift = item.GridCTFPhase.GetInterpolated(new float3(0.5f)) * 180;
+
+                            List<List<string>> NewRows = new List<List<string>>();
+                            //if (Options.Picking.WriteOpticGroups) { og = sessionManager.GetOpticsGroup(item.Name); }
+                            for (int r = 0; r < Positions.Length; r++)
+                            {
+                                string[] Row = Helper.ArrayOfConstant("0", TableBoxNetAll.ColumnCount);
+
+                                Row[TableBoxNetAll.GetColumnID("rlnMagnification")] = "10000.0";
+                                //Row[TableBoxNetAll.GetColumnID("rlnDetectorPixelSize")] = item.OptionsBoxNet.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnDetectorPixelSize")] = Options.Picking.DoFourierCrop ? ((float)Options.BinnedPixelSizeMean * Options.Picking.BoxSize / Options.Picking.FourierCropBox).ToString("F5", CultureInfo.InvariantCulture) : Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture);
+
+
+                                Row[TableBoxNetAll.GetColumnID("rlnDefocusU")] = ((Defoci[r] + Astigmatism) * 1e4f).ToString("F1", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnDefocusV")] = ((Defoci[r] - Astigmatism) * 1e4f).ToString("F1", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnDefocusAngle")] = item.CTF.DefocusAngle.ToString("F1", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnVoltage")] = item.CTF.Voltage.ToString("F1", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnSphericalAberration")] = item.CTF.Cs.ToString("F4", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnAmplitudeContrast")] = item.CTF.Amplitude.ToString("F3", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnPhaseShift")] = PhaseShift.ToString("F1", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnCtfMaxResolution")] = item.CTFResolutionEstimate.ToString("F1", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnCoordinateX")] = Positions[r].X.ToString("F2", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnCoordinateY")] = Positions[r].Y.ToString("F2", CultureInfo.InvariantCulture);
+                                Row[TableBoxNetAll.GetColumnID("rlnImageName")] = (r + 1).ToString("D7") + "@particles/" + item.RootName + "_" + BoxNetSuffix + ".mrcs";
+                                Row[TableBoxNetAll.GetColumnID("rlnMicrographName")] = movieToMicrographName(item.Name);
+                                /*if (Options.Picking.WriteOpticGroups)
+                                {
+                                    Row[TableBoxNetAll.GetColumnID("rlnOpticsGroup")] = og;
+                                }*/
+
+                                NewRows.Add(Row.ToList());
+                            }
+
+                            AllMovieParticleRows.Add(item, NewRows);
+
+                            NRepaired++;
+                            Dispatcher.Invoke(() => ProgressDialog.SetProgress((float)NRepaired / RepairMovies.Count));
+                            Console.WriteLine($"Repaired {NRepaired}/{RepairMovies.Count}");
                         }
 
                         await ProgressDialog.CloseAsync();
                     }
 
                     #endregion
-                    
-                    #region Load or create STAR table for BoxNet output, if needed
+                }
 
-                    string BoxNetSuffix = Helper.PathToNameWithExtension(Options.Picking.ModelPath);
+                #endregion
 
-                    Star TableBoxNetAll = null;
-                    string PathBoxNetAll = Path.Combine(Options.Import.Folder, "allparticles_" + BoxNetSuffix + ".star");
-                    string PathBoxNetAllSubset = Path.Combine(Options.Import.Folder, "allparticles_last" + Options.Picking.RunningWindowLength + "_" + BoxNetSuffix + ".star");
-                    string PathBoxNetFiltered = Path.Combine(Options.Import.Folder, "goodparticles_" + BoxNetSuffix + ".star");
-                    if (Options.ProcessClassification)
+                    if (Options.Movement.ExportMotionTracks)
                     {
-                        sessionManager.PathBoxNetFiltered = PathBoxNetFiltered;
+                        Directory.CreateDirectory(Path.Combine(Options.Import.Folder + "motion"));
                     }
-                    string PathBoxNetFilteredSubset = Path.Combine(Options.Import.Folder, "goodparticles_last" + Options.Picking.RunningWindowLength + "_" + BoxNetSuffix + ".star");
-                    object TableBoxNetAllWriteLock = new object();
-                    int TableBoxNetConcurrent = 0;
-                    
-                    // Switch filter suffix to the one used in current processing
-                    //if (Options.ProcessPicking)
-                    //    Dispatcher.Invoke(() => Options.Filter.ParticlesSuffix = "_" + BoxNetSuffix);
-
-                    Dictionary<Movie, List<List<string>>> AllMovieParticleRows = new Dictionary<Movie, List<List<string>>>();
-                    string og = "0";
-
-                    if (!IsTomo && Options.ProcessPicking && Options.Picking.DoExport && !string.IsNullOrEmpty(Options.Picking.ModelPath))
-                    {
-                        Movie[] TempMovies = FileDiscoverer.GetImmutableFiles();
-
-                        if (File.Exists(PathBoxNetAll))
-                        {
-                            TableBoxNetAll = new Star(PathBoxNetAll, "particles");
-                            if (TableBoxNetAll.RowCount == 0) { TableBoxNetAll = new Star(PathBoxNetAll); }
-                            //TableBoxNetAll = new Star(PathBoxNetAll);
-                            LogToFile("TableBoxNetAll.RowCount is " + TableBoxNetAll.RowCount.ToString());
-                            if (TableBoxNetAll.RowCount < 2)
-                            {
-                                File.Delete(PathBoxNetAll);
-                                TableBoxNetAll = new Star(new string[] { });
-                            }
-                            else{
-                                ProgressDialogController ProgressDialog = null;
-                                await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Loading particle metadata from previous run...", ""));
-                                ProgressDialog.SetIndeterminate();
-
-                                //Original WARP code
-                                /*
-                                Dictionary<string, Movie> NameMapping = new Dictionary<string, Movie>();
-                                string[] ColumnMicName = TableBoxNetAll.GetColumn("rlnMicrographName");
-                                ColumnMicName = ColumnMicName.Select( x => micrographToMovieName(x)).ToArray();
-
-                                for (int r = 0; r < ColumnMicName.Length; r++)
-                                {
-                                    if (!NameMapping.ContainsKey(ColumnMicName[r]))
-                                    {
-                                        var Movie = TempMovies.Where(m => ColumnMicName[r].Contains(m.Name));
-                                        if (Movie.Count() != 1)
-                                            continue;
-
-                                        NameMapping.Add(ColumnMicName[r], Movie.First());
-                                        AllMovieParticleRows.Add(Movie.First(), new List<List<string>>());
-                                    }
-
-                                    AllMovieParticleRows[NameMapping[ColumnMicName[r]]].Add(TableBoxNetAll.GetRow(r));
-                                }
-                                */
-
-                                // Optimized code using LINQ
-
-                                int ColumnIndex = TableBoxNetAll.GetColumnNames().ToList().IndexOf("rlnMicrographName");
-
-                                var AllParticlesDict = TableBoxNetAll
-                                    .GetAllRows()
-                                    .GroupBy(r => r[ColumnIndex])
-                                    .ToDictionary(
-                                        group => micrographToMovieName(group.Key),
-                                        group => group.ToList()
-                                    );
-
-                                AllMovieParticleRows = TempMovies
-                                    .Where(movie => AllParticlesDict.ContainsKey(movie.Name))
-                                    .ToDictionary(movie => movie, movie => AllParticlesDict[movie.Name]);
-
-                                if (Options.Picking.WriteOpticGroups)
-                                {
-                                    foreach (var m in AllMovieParticleRows)
-                                    {
-                                        _ = sessionManager.GetOpticsGroup(m.Key.Name);
-                                    }
-                                }
-
-                                await ProgressDialog.CloseAsync();
-                            }
-                        }
-                        else
-                        {
-                            TableBoxNetAll = new Star(new string[] { });
-                        }
-
-
-                        #region Make sure all columns are there
-
-                        if (!TableBoxNetAll.HasColumn("rlnCoordinateX"))
-                            TableBoxNetAll.AddColumn("rlnCoordinateX", "0.0");
-
-                        if (!TableBoxNetAll.HasColumn("rlnCoordinateY"))
-                            TableBoxNetAll.AddColumn("rlnCoordinateY", "0.0");
-
-                        if (!TableBoxNetAll.HasColumn("rlnMagnification"))
-                            TableBoxNetAll.AddColumn("rlnMagnification", "10000.0");
-                        else
-                            TableBoxNetAll.SetColumn("rlnMagnification", Helper.ArrayOfConstant("10000.0", TableBoxNetAll.RowCount));
-
-                        if (!TableBoxNetAll.HasColumn("rlnDetectorPixelSize"))
-                            TableBoxNetAll.AddColumn("rlnDetectorPixelSize", Options.Picking.DoFourierCrop ? ((float)Options.BinnedPixelSizeMean * Options.Picking.BoxSize / Options.Picking.FourierCropBox).ToString("F5", CultureInfo.InvariantCulture) : Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture));
-                        else
-                            TableBoxNetAll.SetColumn("rlnDetectorPixelSize", Helper.ArrayOfConstant(Options.Picking.DoFourierCrop ? ((float)Options.BinnedPixelSizeMean * Options.Picking.BoxSize / Options.Picking.FourierCropBox).ToString("F5", CultureInfo.InvariantCulture) : Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture), TableBoxNetAll.RowCount));
-
-                        if (!TableBoxNetAll.HasColumn("rlnVoltage"))
-                            TableBoxNetAll.AddColumn("rlnVoltage", "300.0");
-
-                        if (!TableBoxNetAll.HasColumn("rlnSphericalAberration"))
-                            TableBoxNetAll.AddColumn("rlnSphericalAberration", "2.7");
-
-                        if (!TableBoxNetAll.HasColumn("rlnAmplitudeContrast"))
-                            TableBoxNetAll.AddColumn("rlnAmplitudeContrast", "0.07");
-
-                        if (!TableBoxNetAll.HasColumn("rlnPhaseShift"))
-                            TableBoxNetAll.AddColumn("rlnPhaseShift", "0.0");
-
-                        if (!TableBoxNetAll.HasColumn("rlnDefocusU"))
-                            TableBoxNetAll.AddColumn("rlnDefocusU", "0.0");
-
-                        if (!TableBoxNetAll.HasColumn("rlnDefocusV"))
-                            TableBoxNetAll.AddColumn("rlnDefocusV", "0.0");
-
-                        if (!TableBoxNetAll.HasColumn("rlnDefocusAngle"))
-                            TableBoxNetAll.AddColumn("rlnDefocusAngle", "0.0");
-
-                        if (!TableBoxNetAll.HasColumn("rlnCtfMaxResolution"))
-                            TableBoxNetAll.AddColumn("rlnCtfMaxResolution", "999.0");
-
-                        if (!TableBoxNetAll.HasColumn("rlnImageName"))
-                            TableBoxNetAll.AddColumn("rlnImageName", "None");
-
-                        if (!TableBoxNetAll.HasColumn("rlnMicrographName"))
-                            TableBoxNetAll.AddColumn("rlnMicrographName", "None");
-
-                        if (Options.Picking.WriteOpticGroups) {
-                            if (!TableBoxNetAll.HasColumn("rlnOpticsGroup"))
-                                TableBoxNetAll.AddColumn("rlnOpticsGroup", "0");
-                        } else if (TableBoxNetAll.HasColumn("rlnOpticsGroup"))
-                        {
-                            TableBoxNetAll.RemoveColumn("rlnOpticsGroup");
-                        }
-                        #endregion
-                       
-                        #region Repair
-
-                        var RepairMovies = TempMovies.Where(m => !AllMovieParticleRows.ContainsKey(m) && m.OptionsBoxNet != null && File.Exists(m.MatchingDir + m.RootName + "_" + BoxNetSuffix + ".star")).ToList();
-                        Console.WriteLine($"Repairing {RepairMovies.Count} movies");
-                        if (RepairMovies.Count() > 0)
-                        {
-                            ProgressDialogController ProgressDialog = null;
-                            await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Repairing particle metadata...", ""));
-
-                            int NRepaired = 0;
-                            foreach (var item in RepairMovies)
-                            {
-                                float2[] Positions = Star.LoadFloat2(item.MatchingDir + item.RootName + "_" + BoxNetSuffix + ".star",
-                                                                     "rlnCoordinateX",
-                                                                     "rlnCoordinateY");
-
-                                float[] Defoci = new float[Positions.Length];
-                                if (item.GridCTFDefocus != null)
-                                    Defoci = item.GridCTFDefocus.GetInterpolated(Positions.Select(v => new float3(v.X / (item.OptionsBoxNet.Dimensions.X / (float)item.OptionsBoxNet.BinnedPixelSizeMean),
-                                                                                                           v.Y / (item.OptionsBoxNet.Dimensions.Y / (float)item.OptionsBoxNet.BinnedPixelSizeMean),
-                                                                                                           0.5f)).ToArray());
-                                float Astigmatism = (float)item.CTF.DefocusDelta / 2;
-                                float PhaseShift = item.GridCTFPhase.GetInterpolated(new float3(0.5f)) * 180;
-
-                                List<List<string>> NewRows = new List<List<string>>();
-                                //if (Options.Picking.WriteOpticGroups) { og = sessionManager.GetOpticsGroup(item.Name); }
-                                for (int r = 0; r < Positions.Length; r++)
-                                {
-                                    string[] Row = Helper.ArrayOfConstant("0", TableBoxNetAll.ColumnCount);
-
-                                    Row[TableBoxNetAll.GetColumnID("rlnMagnification")] = "10000.0";
-                                    //Row[TableBoxNetAll.GetColumnID("rlnDetectorPixelSize")] = item.OptionsBoxNet.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnDetectorPixelSize")] = Options.Picking.DoFourierCrop ? ((float)Options.BinnedPixelSizeMean * Options.Picking.BoxSize / Options.Picking.FourierCropBox).ToString("F5", CultureInfo.InvariantCulture) : Options.BinnedPixelSizeMean.ToString("F5", CultureInfo.InvariantCulture);
-
-
-                                    Row[TableBoxNetAll.GetColumnID("rlnDefocusU")] = ((Defoci[r] + Astigmatism) * 1e4f).ToString("F1", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnDefocusV")] = ((Defoci[r] - Astigmatism) * 1e4f).ToString("F1", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnDefocusAngle")] = item.CTF.DefocusAngle.ToString("F1", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnVoltage")] = item.CTF.Voltage.ToString("F1", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnSphericalAberration")] = item.CTF.Cs.ToString("F4", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnAmplitudeContrast")] = item.CTF.Amplitude.ToString("F3", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnPhaseShift")] = PhaseShift.ToString("F1", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnCtfMaxResolution")] = item.CTFResolutionEstimate.ToString("F1", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnCoordinateX")] = Positions[r].X.ToString("F2", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnCoordinateY")] = Positions[r].Y.ToString("F2", CultureInfo.InvariantCulture);
-                                    Row[TableBoxNetAll.GetColumnID("rlnImageName")] = (r + 1).ToString("D7") + "@particles/" + item.RootName + "_" + BoxNetSuffix + ".mrcs";
-                                    Row[TableBoxNetAll.GetColumnID("rlnMicrographName")] = movieToMicrographName(item.Name);
-                                    /*if (Options.Picking.WriteOpticGroups)
-                                    {
-                                        Row[TableBoxNetAll.GetColumnID("rlnOpticsGroup")] = og;
-                                    }*/
-
-                                    NewRows.Add(Row.ToList());
-                                }
-
-                                AllMovieParticleRows.Add(item, NewRows);
-
-                                NRepaired++;
-                                Dispatcher.Invoke(() => ProgressDialog.SetProgress((float)NRepaired / RepairMovies.Count));
-                                Console.WriteLine($"Repaired {NRepaired}/{RepairMovies.Count}");
-                            }
-
-                            await ProgressDialog.CloseAsync();
-                        }
-                        
-                        #endregion
-                    }
-
-                    #endregion
 
                     #region Spawn workers and let them load gain refs
 
@@ -1996,6 +2098,69 @@ namespace Warp
                                 //item.ExportMovie(OriginalStack, CurrentOptionsExport);
 
                                 BenchmarkOutput.Finish(TimerOutput);
+                            }
+
+                            if (DoMovement && NeedsNewMotion && Options.Movement.ExportMotionTracks)
+                            {
+                                MapHeader Header = MapHeader.ReadFromFile(item.Path);
+
+                                List<string> HeaderNames = new List<string>()
+                                    {
+                                    "rlnImageSizeX",
+                                    "rlnImageSizeY",
+                                    "rlnImageSizeZ",
+                                    "rlnMicrographMovieName",
+                                    "rlnMicrographBinning",
+                                    "rlnMicrographOriginalPixelSize",
+                                    "rlnMicrographDoseRate",
+                                    "rlnMicrographPreExposure",
+                                    "rlnVoltage",
+                                    "rlnMicrographStartFrame",
+                                    "rlnMotionModelVersion"
+                                    };
+
+                                List<string> HeaderValues = new List<string>()
+                                    {
+                                    Header.Dimensions.X.ToString(),
+                                    Header.Dimensions.Y.ToString(),
+                                    Header.Dimensions.Z.ToString(),
+                                    item.Name,
+                                    Math.Pow(2.0, (double)Options.Import.BinTimes).ToString("F5"),
+                                    Options.PixelSizeMean.ToString("F5"),
+                                    Options.Import.DosePerAngstromFrame.ToString("F5"),
+                                    "0",
+                                    Options.CTF.Voltage.ToString(),
+                                    "1",
+                                    "0"
+                                    };
+
+                                if (!string.IsNullOrEmpty(Options.Import.GainPath))
+                                {
+                                    HeaderNames.Add("rlnMicrographGainName");
+                                    HeaderValues.Add(Options.Import.GainPath);
+                                }
+
+                                StarParameters ParamsTable = new StarParameters(HeaderNames.ToArray(), HeaderValues.ToArray());
+
+                                float2[] MotionTrack = item.GetMotionTrack(new float2(0.5f, 0.5f), 1).Select(v => v / (float)Options.PixelSizeMean).ToArray();
+                                Star TrackTable = new Star(new[]
+                                {
+                                    Helper.ArrayOfSequence(1, MotionTrack.Length + 1, 1).Select(v => v.ToString()).ToArray(),
+                                    MotionTrack.Select(v => (-v.X).ToString("F5")).ToArray(),
+                                    MotionTrack.Select(v => (-v.Y).ToString("F5")).ToArray()
+                                    },
+                                new[]
+                                {
+                                    "rlnMicrographFrameNumber",
+                                    "rlnMicrographShiftX",
+                                    "rlnMicrographShiftY"
+                                });
+
+                                Star.SaveMultitable(item.DirectoryName + "motion/" + item.RootName + ".star", new Dictionary<string, Star>()
+                                    {
+                                    { "general", ParamsTable },
+                                    { "global_shift", TrackTable },
+                                    });
                             }
 
                             if (!File.Exists(item.ThumbnailsPath))
@@ -2346,6 +2511,34 @@ namespace Warp
                     if (Options.ProcessPicking && Options.Picking.DoExport && !string.IsNullOrEmpty(Options.Picking.ModelPath))
                     {
                         ProgressDialogController ProgressDialog = null;
+
+                        if (Options.Picking.WriteOpticGroups && sessionManager.canaddopticgroups)
+                        {
+                            if (!sessionManager.IsOpticsGroupsComplete(AllMovieParticleRows.Count))
+                            {
+                                await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Updating missing optics groups...", ""));
+                                ProgressDialog.SetIndeterminate();
+                                Console.WriteLine("Waiting for session loop to update optics groups");
+                                foreach (var m in AllMovieParticleRows.Keys.Distinct())
+                                {
+                                    sessionManager.GetOpticsGroup(m.Name);
+                                }
+
+                                await sessionManager.SessionLoop(EPUSessionCancellationToken.Token, 2);
+                                await ProgressDialog.CloseAsync();
+                            }
+
+                            Dispatcher.Invoke(() => {
+                                if (sessionManager.IsOpticsGroupsComplete(AllMovieParticleRows.Count))
+                                {
+                                    TextBlockNOpticsGroupG.Text = " g";
+                                }
+                                else {
+                                    TextBlockNOpticsGroupG.Text = " g...";
+                                }
+                            });
+                        }
+
                         await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Waiting for the last particle files to be written out...", ""));
                         ProgressDialog.SetIndeterminate();
 
@@ -2427,8 +2620,117 @@ namespace Warp
                         }
 
                         await ProgressDialog.CloseAsync();
-                    }
 
+                        int r = 0;
+                        await Dispatcher.Invoke(async () => ProgressDialog = await this.ShowProgressAsync($"Writing goodmicrographs.star file...", ""));
+                        ProgressDialog.SetProgress(r);
+
+                        var ValidMovies = AllMovieParticleRows.Keys.ToList().Distinct().Where(m => !(m.UnselectFilter || (m.UnselectManual != null && m.UnselectManual.Value))).ToList();
+
+                        string ExportPath = Path.Combine(Options.Import.Folder,"goodmicrographs.star");
+                        bool IncludePolishing = false;
+                        if (Options.Movement.ExportMotionTracks)
+                        {
+                            IncludePolishing = ValidMovies.Any(m => !File.Exists(m.DirectoryName + "motion/" + m.RootName + ".star"));
+                        }
+
+                        bool AddOpticsGroup = sessionManager.canaddopticgroups && Options.Picking.WriteOpticGroups;
+                            string PathPrefix = "", PathPrefixAverage = "", GainPath = "";
+                        if (ValidMovies.Count > 0)
+                        {
+                            Uri UriStar = new Uri(ExportPath);
+
+                            PathPrefix = Helper.PathToFolder(UriStar.MakeRelativeUri(new Uri(ValidMovies[0].Path)).ToString());
+                            if (PathPrefix == ValidMovies[0].Name)
+                                PathPrefix = "";
+                            PathPrefixAverage = Helper.PathToFolder(UriStar.MakeRelativeUri(new Uri(ValidMovies[0].AveragePath)).ToString());
+                        }
+
+                        bool IncludeCTF = ValidMovies.Any(v => v.OptionsCTF != null);
+
+                        Star TableOut = new Star(new[] { "rlnMicrographName" });
+                        if (IncludeCTF)
+                        {
+                            TableOut.AddColumn("rlnMagnification");
+                            TableOut.AddColumn("rlnDetectorPixelSize");
+                            TableOut.AddColumn("rlnVoltage");
+                            TableOut.AddColumn("rlnSphericalAberration");
+                            TableOut.AddColumn("rlnAmplitudeContrast");
+                            TableOut.AddColumn("rlnPhaseShift");
+                            TableOut.AddColumn("rlnDefocusU");
+                            TableOut.AddColumn("rlnDefocusV");
+                            TableOut.AddColumn("rlnDefocusAngle");
+                            TableOut.AddColumn("rlnCtfMaxResolution");
+                            TableOut.AddColumn("rlnBeamTiltX");
+                            TableOut.AddColumn("rlnBeamTiltY");
+                        }
+                        if (IncludePolishing)
+                            TableOut.AddColumn("rlnMicrographMetadata");
+                        if (AddOpticsGroup)
+                            TableOut.AddColumn("rlnOpticsGroup");
+
+                        Parallel.ForEach(ValidMovies, new ParallelOptions() { MaxDegreeOfParallelism = 4 }, movie =>
+                        {
+                            List<string> Row = new List<string>() { PathPrefixAverage + movie.RootName + ".mrc" };
+
+                            if (AddOpticsGroup)
+                            {
+                                movie.CTF.BeamTilt = sessionManager.GetBeamTilt(movie.Name);
+                            }
+
+                            if (movie.OptionsCTF != null)
+                            {
+                                Row.AddRange(new[]
+                                {
+                                    (1e4M / movie.OptionsCTF.BinnedPixelSizeMean).ToString("F1", CultureInfo.InvariantCulture),
+                                    "1.0",
+                                    movie.CTF.Voltage.ToString("F1", CultureInfo.InvariantCulture),
+                                    movie.CTF.Cs.ToString("F4", CultureInfo.InvariantCulture),
+                                    movie.CTF.Amplitude.ToString("F3", CultureInfo.InvariantCulture),
+                                    (movie.CTF.PhaseShift * 180M).ToString("F1", CultureInfo.InvariantCulture),
+                                    ((movie.CTF.Defocus + movie.CTF.DefocusDelta / 2) * 1e4M).ToString("F1", CultureInfo.InvariantCulture),
+                                    ((movie.CTF.Defocus - movie.CTF.DefocusDelta / 2) * 1e4M).ToString("F1", CultureInfo.InvariantCulture),
+                                    movie.CTF.DefocusAngle.ToString("F1", CultureInfo.InvariantCulture),
+                                    movie.CTFResolutionEstimate.ToString("F1", CultureInfo.InvariantCulture),
+                                    movie.CTF.BeamTilt.X.ToString("F2", CultureInfo.InvariantCulture),
+                                    movie.CTF.BeamTilt.Y.ToString("F2", CultureInfo.InvariantCulture)
+                                    });
+                            }
+                            else
+                            {
+                                Row.AddRange(Helper.ArrayOfFunction(i => "0.0", 12));
+                            }
+
+                            if (IncludePolishing)
+                                Row.Add(PathPrefix + "motion/" + movie.RootName + ".star");
+
+                            if (AddOpticsGroup)
+                            {
+                                Row.Add(sessionManager.GetOpticsGroup(movie.Name));
+                            }
+
+                            lock (TableOut)
+                            {
+                                TableOut.AddRow(Row);
+                                r += 1;
+                                if (r % 2 == 0 || r == ValidMovies.Count)
+                                {
+                                    Dispatcher.Invoke(() => {
+                                        ProgressDialog.SetProgress(r / ValidMovies.Count);
+                                    });
+                                }
+                            }
+                        });
+
+                        Star.SaveMultitable(ExportPath, new Dictionary<string, Star>()
+                                    {
+                                    { "optics", sessionManager.OpticsGroupTable },
+                                    { "micrographs", TableOut },
+                         });
+
+                        await ProgressDialog.CloseAsync();
+
+                    }
                     #endregion
                 });
             }

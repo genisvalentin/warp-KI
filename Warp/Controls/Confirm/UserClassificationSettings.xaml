@@ -57,7 +57,8 @@
         </StackPanel>
         <StackPanel Grid.Row="4" Orientation="Horizontal" VerticalAlignment="Center">
             <Label Content="Import folder:"/>
-            <TextBox Text="{Binding ClassificationMountPoint, Mode=TwoWay}" MinWidth="200"/>
+            <TextBox Name="ClassificationMountPointTextBox" Text="{Binding ClassificationMountPoint, Mode=TwoWay}" MinWidth="200"/>
+            <ProgressBar Name="TestingLinuxServerIndicator" IsIndeterminate="True" Width="25" Height="25" Visibility="Collapsed"/>
             <Button Name="ButtonMountPoint" Style="{StaticResource HyperlinkLikeButton}" Click="ButtonMountPoint_OnClick" Margin="6,0,0,0" VerticalAlignment="Center">
                 <TextBlock Name="ButtonMountPointText" HorizontalAlignment="Right" TextAlignment="Right" MaxWidth="400">Browse</TextBlock>
             </Button>

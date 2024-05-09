@@ -8747,6 +8747,7 @@ namespace Warp
         [WarpSerializable]
         public int3 GridDims { get; set; }
 
+
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
